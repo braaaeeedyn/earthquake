@@ -1,0 +1,38 @@
+======================================================================
+GEOMAGNETIC EARTHQUAKE-PRECURSOR FEASIBILITY REPORT
+======================================================================
+Config: M>=5.0, R<=200.0km, lead=7d, base_rate=6.0%
+(Synthetic ground-truth effect size = 0.35 sigma; set 0 to test the null.)
+
+TEST 1  Feature separation (in-sample, necessary not sufficient)
+  5/7 features separate at p<0.05.
+    H_mean             delta=+0.558  p=0.00e+00
+    Z_mean             delta=-0.526  p=0.00e+00
+    ZH_polarization    delta=+0.288  p=8.34e-112
+    ULF_power          delta=+0.234  p=1.29e-74
+    Z_var              delta=-0.104  p=3.39e-16
+    var_ratio_7v20     delta=+0.018  p=1.71e-01
+    H_var              delta=+0.000  p=9.79e-01
+
+TEST 2  Storm confounder (the make-or-break check)
+  Signal survives de-storming: True
+  -> If False, the 'precursor' is largely global magnetic storms,
+     not earthquake physics. This is the #1 false-positive trap.
+
+TEST 3  Out-of-sample skill (time-ordered 70/30 split)
+  Always-'no' accuracy baseline: 0.951  <-- beating THIS
+     with accuracy is trivial and meaningless.
+  logreg  AUC=0.785  recall=0.73  FAR=0.29  precision=0.11  MCC=+0.204
+  gbdt    AUC=0.778  recall=0.01  FAR=0.00  precision=0.09  MCC=+0.011
+
+TEST 4  Molchanov prediction gain
+  operating tau=0.41  nu=0.08  gain=2.25x
+  (gain=1 is random; >1 means better than chance at that operating pt)
+
+----------------------------------------------------------------------
+VERDICT
+  GO (conditional): out-of-sample AUC and MCC exceed noise AND the
+  signal survives the storm confounder. There is enough real signal
+  to justify building the CNN/GNN/Transformer, which may extract more.
+  Best OOS AUC=0.785, MCC=+0.204.
+----------------------------------------------------------------------

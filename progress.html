@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Geomagnetic Earthquake Forecast · Build Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0d1119;
+    --bg-2: #121826;
+    --bg-3: #1a2233;
+    --line: #26304a;
+    --text: #e8ecf5;
+    --muted: #9aa7c4;
+    --accent: #ff5a4d;   /* seismograph ink */
+    --amber: #ffb347;    /* signal */
+    --good: #34d399;     /* passing */
+    --grid: rgba(255,255,255,0.05);
+    --shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 18px 40px -24px rgba(0,0,0,0.7);
+
+    --display: "Space Grotesk", system-ui, sans-serif;
+    --body: "Inter", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  }
+  [data-theme="light"] {
+    --bg: #eef1f7;
+    --bg-2: #ffffff;
+    --bg-3: #f3f6fb;
+    --line: #d7deec;
+    --text: #131826;
+    --muted: #51607d;
+    --accent: #e0402f;
+    --amber: #b9760c;
+    --good: #0f9d6b;
+    --grid: rgba(20,30,60,0.05);
+    --shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 18px 40px -28px rgba(40,60,110,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- console top bar ---- */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 24px;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .mark { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.04em; }
+  .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 var(--good); }
+  @media (prefers-reduced-motion: no-preference) {
+    .pulse { animation: pulse 2.4s ease-out infinite; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 70%, transparent); }
+      70% { box-shadow: 0 0 0 7px transparent; }
+      100% { box-shadow: 0 0 0 0 transparent; }
+    }
+  }
+  .topbar .spacer { flex: 1; }
+  .station-strip { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.08em; display: none; }
+  @media (min-width: 760px) { .station-strip { display: block; } }
+
+  .toggle {
+    appearance: none; cursor: pointer;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+    color: var(--text); background: var(--bg-3);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 7px 14px; display: inline-flex; align-items: center; gap: 8px;
+    transition: border-color .2s, background .2s;
+  }
+  .toggle:hover { border-color: var(--accent); }
+  .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- hero ---- */
+  .hero { position: relative; padding: 64px 0 40px; overflow: hidden; }
+  .matrix-bg {
+    position: absolute; inset: 0; z-index: 0;
+    display: grid; grid-template-columns: repeat(27, 1fr); grid-auto-rows: 1fr;
+    gap: 2px; opacity: 0.5; pointer-events: none;
+    -webkit-mask-image: radial-gradient(120% 90% at 70% 10%, #000 10%, transparent 70%);
+            mask-image: radial-gradient(120% 90% at 70% 10%, #000 10%, transparent 70%);
+  }
+  .matrix-bg i { background: var(--grid); border-radius: 1px; }
+  .matrix-bg i.hot { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .matrix-bg i.warm { background: color-mix(in srgb, var(--amber) 35%, transparent); }
+
+  .hero-inner { position: relative; z-index: 1; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(34px, 6vw, 60px); line-height: 1.02;
+    letter-spacing: -0.02em; margin: 0 0 18px; max-width: 16ch;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: clamp(16px, 2.2vw, 19px); color: var(--muted); max-width: 56ch; margin: 0 0 28px; }
+
+  .trace { width: 100%; height: 96px; display: block; margin: 6px 0 8px; }
+  .trace path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .trace .axis { stroke: var(--line); stroke-width: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .trace path.draw { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); animation: draw 2.6s ease-out forwards .2s; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+  }
+  .trace-cap { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; display: flex; justify-content: space-between; }
+
+  /* ---- section scaffolding ---- */
+  section { padding: 46px 0; border-top: 1px solid var(--line); }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 26px; }
+  .sec-num { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: 0.1em; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: clamp(22px, 3.4vw, 30px); letter-spacing: -0.01em; margin: 0; }
+  .sec-note { color: var(--muted); font-size: 14px; margin: -16px 0 26px; max-width: 64ch; }
+
+  /* ---- pipeline flow ---- */
+  .flow { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 720px) { .flow { grid-template-columns: repeat(3, 1fr); } }
+  .node {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 16px 14px; box-shadow: var(--shadow); position: relative;
+  }
+  .node .stage { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
+  .node h3 { font-family: var(--display); font-weight: 600; font-size: 17px; margin: 6px 0 4px; }
+  .node p { margin: 0; font-size: 13px; color: var(--muted); }
+  .state { position: absolute; top: 14px; right: 14px; font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; letter-spacing: 0.04em; }
+  .state.done { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .state.todo { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+  .node.todo { border-style: dashed; }
+
+  /* ---- results grid ---- */
+  .grid-results { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 680px) { .grid-results { grid-template-columns: repeat(3, 1fr); } }
+  .card {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .card.fused {
+    grid-column: 1 / -1;
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    background:
+      radial-gradient(140% 120% at 100% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%),
+      var(--bg-2);
+  }
+  .card .role { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .card h3 { font-family: var(--display); font-weight: 600; font-size: 20px; margin: 4px 0 2px; }
+  .card .sub { font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .metric { background: var(--bg-3); border: 1px solid var(--line); border-radius: 9px; padding: 10px 8px; text-align: center; }
+  .metric .v { font-family: var(--mono); font-weight: 600; font-size: 18px; }
+  .metric .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; margin-top: 2px; }
+  .metric.key { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .metric.key .v { color: var(--accent); }
+
+  /* ---- comparison chart ---- */
+  .chart { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 24px 22px 18px; box-shadow: var(--shadow); }
+  .plot { position: relative; height: 240px; display: grid; grid-template-columns: repeat(4, 1fr); align-items: end; gap: 26px; padding: 0 8px; }
+  .baseline { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--amber); }
+  .baseline span { position: absolute; right: 0; top: -20px; font-family: var(--mono); font-size: 11px; color: var(--amber); }
+  .bar { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar .col { width: 100%; max-width: 64px; border-radius: 6px 6px 0 0; background: color-mix(in srgb, var(--accent) 35%, var(--bg-3)); border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-bottom: none; transition: height .8s cubic-bezier(.2,.8,.2,1); }
+  .bar.fused .col { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+  .bar .val { font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+  .bar .lab { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; letter-spacing: 0.04em; }
+  @media (prefers-reduced-motion: reduce) { .bar .col { transition: none; } }
+
+  /* ---- facts row ---- */
+  .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  @media (min-width: 680px) { .facts { grid-template-columns: repeat(4, 1fr); } }
+  .fact { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--bg-2); }
+  .fact .v { font-family: var(--mono); font-size: 22px; font-weight: 600; }
+  .fact .k { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* ---- comparison table ---- */
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); box-shadow: var(--shadow); }
+  table.cmp { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; min-width: 560px; }
+  table.cmp th, table.cmp td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.cmp thead th { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+  table.cmp .cell-key { color: var(--text); }
+  table.cmp .roc { font-weight: 600; }
+  table.cmp .roc.skill { color: var(--good); }
+  table.cmp .roc.chance { color: var(--muted); }
+  table.cmp .roc.flag { color: var(--amber); }
+  table.cmp .roc.degen { color: var(--accent); }
+  table.cmp .sub { color: var(--muted); font-size: 11px; }
+  .cmp-legend { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 12px 2px 0; display: flex; flex-wrap: wrap; gap: 14px; }
+  .cmp-legend b { font-weight: 600; }
+  .cmp-legend .lg-skill { color: var(--good); }
+  .cmp-legend .lg-flag { color: var(--amber); }
+  .cmp-legend .lg-degen { color: var(--accent); }
+
+  /* ---- next steps ---- */
+  ol.steps { counter-reset: step; list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  ol.steps li { display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  ol.steps li::before { counter-increment: step; content: counter(step,decimal-leading-zero); font-family: var(--mono); font-size: 13px; color: var(--accent); padding-top: 2px; }
+  ol.steps b { font-family: var(--display); font-weight: 600; }
+  ol.steps p { margin: 3px 0 0; font-size: 14px; color: var(--muted); }
+  .gate { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line)); border-radius: 999px; padding: 2px 8px; margin-left: 8px; vertical-align: 2px; }
+
+  /* ---- footer ---- */
+  footer { padding: 40px 0 64px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .disclaimer { border-left: 2px solid var(--accent); padding-left: 14px; max-width: 70ch; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="mark"><span class="pulse" aria-hidden="true"></span> EQ&nbsp;FORECAST&nbsp;/&nbsp;BUILD&nbsp;CONSOLE</div>
+    <div class="spacer"></div>
+    <div class="station-strip" id="stationStrip">HOL · SBA · TEH · RIV · GOL</div>
+    <button class="toggle" id="themeToggle" type="button" aria-pressed="false">
+      <span id="themeIcon">◐</span><span id="themeLabel">Light</span>
+    </button>
+  </div>
+
+  <header class="hero">
+    <div class="matrix-bg" id="matrixBg" aria-hidden="true"></div>
+    <div class="wrap hero-inner">
+      <p class="eyebrow">Geomagnetic precursor · real-data evaluation</p>
+      <h1>Reading the field for the <em>shake</em> before it comes.</h1>
+      <p class="lede">A fused CNN + GNN + Transformer model learns from station magnetometer
+        traces to estimate the chance of a nearby earthquake within seven days. Tested on
+        ~14 years of real INTERMAGNET + USGS data across two regions — California and Japan —
+        with identical methodology. This console reports whether it found any signal.</p>
+
+      <svg class="trace" id="trace" viewBox="0 0 1000 96" preserveAspectRatio="none" role="img" aria-label="Simulated magnetometer trace ramping into a precursor spike">
+        <line class="axis" x1="0" y1="78" x2="1000" y2="78"></line>
+        <path id="tracePath" class="draw"></path>
+      </svg>
+      <div class="trace-cap"><span>−27 days</span><span>precursor window</span><span>anchor → +7-day horizon</span></div>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <section id="pipeline">
+      <div class="sec-head"><span class="sec-num">01</span><h2>The pipeline, end to end</h2></div>
+      <p class="sec-note">Built in dependency order. Models and the app were developed against a
+        synthetic fixture first, so real-data access (gated) never blocked progress.</p>
+      <div class="flow" id="flow"></div>
+    </section>
+
+    <section id="results">
+      <div class="sec-head"><span class="sec-num">02</span><h2>Two-region precursor test</h2></div>
+      <p class="sec-note">Real data, both regions, identical methodology: a fixed grid of
+        proximity radius × magnitude cutoff, evaluated on leakage-safe chronological test splits,
+        5 seeds per cell. Nothing is tuned to flatter any metric. ROC-AUC measures discrimination
+        (no skill = 0.50); PR-AUC is shown over the positive base rate (no skill = 1.0×).</p>
+      <div class="cmp-wrap"><table class="cmp" id="cmp"></table></div>
+      <div class="cmp-legend" id="cmpLegend"></div>
+    </section>
+
+    <section id="chart">
+      <div class="sec-head"><span class="sec-num">03</span><h2>Discrimination vs. chance</h2></div>
+      <p class="sec-note">ROC-AUC for the balanced grid cells (base rate well away from 0 and 1, so
+        there is something to predict). The dashed line is the no-skill level, 0.50.</p>
+      <div class="chart">
+        <div class="plot" id="plot">
+          <div class="baseline" id="baselineLine"><span>0.50 · no skill</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="facts">
+      <div class="sec-head"><span class="sec-num">04</span><h2>Run at a glance</h2></div>
+      <div class="facts" id="facts"></div>
+    </section>
+
+    <section id="next">
+      <div class="sec-head"><span class="sec-num">05</span><h2>What's next</h2></div>
+      <ol class="steps" id="steps"></ol>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p class="disclaimer"><strong>Honest disclaimer.</strong> Every number on this page comes from
+        <strong>real INTERMAGNET + USGS data</strong> over ~14 years, on leakage-safe chronological
+        test splits with nothing tuned to flatter the result. The finding is essentially
+        <strong>chance-level discrimination</strong> — no reliable 7-day precursor signal — which is
+        consistent with geomagnetic earthquake prediction being scientifically contested. This is a
+        research prototype, not an alerting system.</p>
+    </div>
+  </footer>
+
+<script>
+  // ---- data: real numbers from scripts/grid_experiment.py -> data/processed/grid_results.json ----
+  // minute samples, window 2010-01-01 for 5110 d, 5 seeds/cell, 40 epochs. roc=null => degenerate (all-positive).
+  const NOSKILL_ROC = 0.50;
+  const GRID = {
+    california: [
+      { mag: 4.5, prox: 300,  base: 0.048, roc: 0.587, rci: 0.045, pr: 0.068, prb: 1.40, pos: 35  },
+      { mag: 4.5, prox: 500,  base: 0.140, roc: 0.578, rci: 0.021, pr: 0.165, prb: 1.17, pos: 102 },
+      { mag: 4.5, prox: 700,  base: 0.317, roc: 0.521, rci: 0.029, pr: 0.326, prb: 1.03, pos: 230 },
+      { mag: 4.5, prox: 1000, base: 0.424, roc: 0.498, rci: 0.024, pr: 0.440, prb: 1.04, pos: 308 },
+      { mag: 5.0, prox: 300,  base: 0.010, roc: 0.760, rci: 0.032, pr: 0.025, prb: 2.56, pos: 7   },
+      { mag: 5.0, prox: 500,  base: 0.050, roc: 0.526, rci: 0.022, pr: 0.066, prb: 1.34, pos: 36  },
+      { mag: 5.0, prox: 700,  base: 0.145, roc: 0.508, rci: 0.053, pr: 0.156, prb: 1.08, pos: 105 },
+      { mag: 5.0, prox: 1000, base: 0.186, roc: 0.510, rci: 0.028, pr: 0.224, prb: 1.21, pos: 135 },
+    ],
+    japan: [
+      { mag: 4.5, prox: 300,  base: 0.957, roc: 0.451, rci: 0.085, pr: 0.947, prb: 0.99, pos: 697 },
+      { mag: 4.5, prox: 500,  base: 0.995, roc: 0.272, rci: 0.051, pr: 0.990, prb: 1.00, pos: 724 },
+      { mag: 4.5, prox: 700,  base: 1.000, roc: null,  rci: 0.000, pr: 1.000, prb: 1.00, pos: 728 },
+      { mag: 4.5, prox: 1000, base: 1.000, roc: null,  rci: 0.000, pr: 1.000, prb: 1.00, pos: 728 },
+      { mag: 5.0, prox: 300,  base: 0.452, roc: 0.527, rci: 0.025, pr: 0.474, prb: 1.05, pos: 329 },
+      { mag: 5.0, prox: 500,  base: 0.685, roc: 0.493, rci: 0.007, pr: 0.688, prb: 1.00, pos: 499 },
+      { mag: 5.0, prox: 700,  base: 0.757, roc: 0.476, rci: 0.028, pr: 0.735, prb: 0.97, pos: 551 },
+      { mag: 5.0, prox: 1000, base: 0.806, roc: 0.543, rci: 0.008, pr: 0.821, prb: 1.02, pos: 587 },
+    ],
+  };
+  // balanced cells (0.15 < base < 0.85) — the ones where discrimination is meaningful
+  const CHART = [
+    { lab: "CA M4.5·700",  roc: 0.521 },
+    { lab: "CA M4.5·1000", roc: 0.498 },
+    { lab: "CA M5.0·1000", roc: 0.510 },
+    { lab: "JP M5.0·300",  roc: 0.527 },
+    { lab: "JP M5.0·700",  roc: 0.476 },
+    { lab: "JP M5.0·1000", roc: 0.543 },
+  ];
+
+  const PIPELINE = [
+    { stage: "Stage 01–02", name: "Data pipeline", state: "done",
+      desc: "Minute → hourly → daily → 24×27 matrices, labeled, with leakage-safe chronological splits." },
+    { stage: "Fixture", name: "Synthetic fixture", state: "done",
+      desc: "Fabricated INTERMAGNET-style data with a learnable precursor, behind the real-data interface." },
+    { stage: "Stage 03", name: "CNN — spatial", state: "done",
+      desc: "Convolutions over each station's hour × day field." },
+    { stage: "Stage 04", name: "GNN — inter-station", state: "done",
+      desc: "Hand-rolled GCN over the geographic station graph." },
+    { stage: "Stage 05", name: "Transformer — temporal", state: "done",
+      desc: "Attention across the 27-day window." },
+    { stage: "Stage 06", name: "Fusion + eval", state: "done",
+      desc: "Late-fusion classifier validated against the 60% baseline." },
+    { stage: "Stage 07", name: "Web app surface", state: "done",
+      desc: "React + Vite + Capacitor app reading the forecast contract." },
+    { stage: "Stage 03 (data)", name: "Real INTERMAGNET + USGS", state: "done",
+      desc: "Real data wired behind the same interface; two-region grid (CA + Japan) built and labeled." },
+    { stage: "Stage 06 (live)", name: "Live inference + figures", state: "todo",
+      desc: "Replace the placeholder forecast with live model output; ship evidence figures." },
+  ];
+
+  const STEPS = [
+    { t: "Result: discrimination at chance", g: "real data", d: "Across both regions, balanced cells land at ROC-AUC 0.47–0.59 — within noise of the 0.50 no-skill line. No reliable 7-day precursor signal was found in the geomagnetic data." },
+    { t: "Treat the one outlier with suspicion", g: "7 events", d: "California M5.0 / 300 km shows ROC-AUC 0.76, but on only 7 positive windows; every neighbouring cell collapses to ~0.50. Almost certainly small-sample noise, not signal." },
+    { t: "Japan's labels are saturated", g: "fix cutoffs", d: "At 300–1000 km nearly every window is positive (base rate 0.96–1.00), so there is nothing to discriminate. Only tighter, rarer cutoffs there are informative." },
+    { t: "Keep claims conservative", g: "", d: "Consistent with geomagnetic earthquake prediction being scientifically contested. This stays a research prototype, not an alerting system." },
+  ];
+
+  const pct = x => Math.round(x * 100) + "%";
+
+  // ---- render pipeline ----
+  document.getElementById("flow").innerHTML = PIPELINE.map(n => `
+    <div class="node ${n.state === 'todo' ? 'todo' : ''}">
+      <span class="state ${n.state}">${n.state === 'done' ? 'shipped' : 'planned'}</span>
+      <div class="stage">${n.stage}</div>
+      <h3>${n.name}</h3>
+      <p>${n.desc}</p>
+    </div>`).join("");
+
+  // ---- render comparison table ----
+  // classify a cell's ROC-AUC: degenerate (no labels vary), chance, flagged (apparent skill on tiny n), or skill.
+  function rocClass(c) {
+    if (c.roc === null) return "degen";
+    if (c.base <= 0.02 || c.base >= 0.98) return "degen";
+    if (c.roc >= 0.60 && c.pos < 20) return "flag";
+    if (c.roc >= 0.60) return "skill";
+    return "chance";
+  }
+  function rocText(c) {
+    if (c.roc === null) return "—";
+    return `${c.roc.toFixed(3)}<span class="sub"> ±${c.rci.toFixed(3)}</span>`;
+  }
+  const REGIONS = ["california", "japan"];
+  const rows = GRID.california.map((_, i) => i);
+  const head = `<thead><tr><th>cutoff</th>` +
+    REGIONS.map(r => `<th>${r[0].toUpperCase() + r.slice(1)} · ROC-AUC</th><th>${r[0].toUpperCase() + r.slice(1)} · PR/base</th>`).join("") +
+    `</tr></thead>`;
+  const body = "<tbody>" + rows.map(i => {
+    const ref = GRID.california[i];
+    let tds = `<td class="cell-key">M${ref.mag.toFixed(1)} · ${ref.prox} km</td>`;
+    REGIONS.forEach(r => {
+      const c = GRID[r][i];
+      tds += `<td class="roc ${rocClass(c)}">${rocText(c)}</td>` +
+             `<td>${c.pr.toFixed(2)}/${c.base.toFixed(2)} = ${c.prb.toFixed(2)}× <span class="sub">(n+=${c.pos})</span></td>`;
+    });
+    return `<tr>${tds}</tr>`;
+  }).join("") + "</tbody>";
+  document.getElementById("cmp").innerHTML = head + body;
+  document.getElementById("cmpLegend").innerHTML =
+    `<span><b class="lg-skill">●</b> ROC-AUC ≥ 0.60 on adequate n</span>` +
+    `<span><b class="lg-flag">●</b> apparent skill on &lt; 20 events — treat as noise</span>` +
+    `<span><b class="lg-degen">●</b> degenerate cell (base rate ≈ 0 or 1)</span>` +
+    `<span>chance = grey, ≈ 0.50</span>`;
+
+  // ---- discrimination chart (ROC-AUC vs 0.50 no-skill) ----
+  const plot = document.getElementById("plot");
+  plot.style.gridTemplateColumns = `repeat(${CHART.length}, 1fr)`;
+  CHART.forEach(m => {
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.innerHTML = `<span class="val">${m.roc.toFixed(3)}</span><div class="col" style="height:0"></div><span class="lab">${m.lab}</span>`;
+    plot.appendChild(bar);
+  });
+  // map ROC 0..1 to 0..84% of plot height; no-skill line at 0.50.
+  document.getElementById("baselineLine").style.bottom = (NOSKILL_ROC * 84) + "%";
+  requestAnimationFrame(() => {
+    plot.querySelectorAll(".bar").forEach((bar, i) => {
+      bar.querySelector(".col").style.height = (CHART[i].roc * 84) + "%";
+    });
+  });
+
+  // ---- facts ----
+  const FACTS = [
+    { v: "2", k: "regions tested" },
+    { v: "~14 yr", k: "record per region" },
+    { v: "5", k: "seeds / grid cell" },
+    { v: "0.50", k: "no-skill ROC-AUC" },
+  ];
+  document.getElementById("facts").innerHTML = FACTS.map(f =>
+    `<div class="fact"><div class="v">${f.v}</div><div class="k">${f.k}</div></div>`).join("");
+
+  // ---- next steps ----
+  document.getElementById("steps").innerHTML = STEPS.map(s => `
+    <li><div><b>${s.t}${s.g ? `<span class="gate">${s.g}</span>` : ''}</b><p>${s.d}</p></div></li>`).join("");
+
+  // ---- hero magnetometer trace: noisy baseline ramping into a precursor spike ----
+  (function () {
+    const W = 1000, mid = 52, n = 220;
+    let seed = 7;
+    const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+    let d = "";
+    for (let i = 0; i <= n; i++) {
+      const x = (i / n) * W;
+      const t = i / n;
+      const ramp = t > 0.62 ? Math.pow((t - 0.62) / 0.38, 1.6) * 30 : 0;     // precursor build-up
+      const spike = t > 0.93 ? Math.sin((t - 0.93) / 0.07 * Math.PI) * 34 : 0; // the event
+      const noise = (rnd() - 0.5) * (6 + ramp * 0.5);
+      const y = mid - ramp - spike + noise;
+      d += (i === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+    }
+    const path = document.getElementById("tracePath");
+    path.setAttribute("d", d.trim());
+    const len = path.getTotalLength();
+    path.style.setProperty("--len", len);
+  })();
+
+  // ---- matrix backdrop (24 rows × 27 cols, echoing the data shape) ----
+  (function () {
+    const bg = document.getElementById("matrixBg");
+    const rows = 24, cols = 27, frag = document.createDocumentFragment();
+    let seed = 13;
+    const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = document.createElement("i");
+        const ramp = c / cols;                 // later days = stronger precursor
+        const v = rnd();
+        if (v < ramp * 0.5) cell.className = "hot";
+        else if (v < ramp * 0.8) cell.className = "warm";
+        frag.appendChild(cell);
+      }
+    }
+    bg.appendChild(frag);
+  })();
+
+  // ---- theme toggle ----
+  (function () {
+    const root = document.documentElement;
+    const btn = document.getElementById("themeToggle");
+    const icon = document.getElementById("themeIcon");
+    const label = document.getElementById("themeLabel");
+    const saved = localStorage.getItem("eq-theme");
+    const initial = saved || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    apply(initial);
+    btn.addEventListener("click", () => apply(root.getAttribute("data-theme") === "dark" ? "light" : "dark"));
+    function apply(theme) {
+      root.setAttribute("data-theme", theme);
+      localStorage.setItem("eq-theme", theme);
+      const dark = theme === "dark";
+      icon.textContent = dark ? "◐" : "◑";
+      label.textContent = dark ? "Light" : "Dark";
+      btn.setAttribute("aria-pressed", String(!dark));
+    }
+  })();
+</script>
+</body>
+</html>

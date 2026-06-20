@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Data (large / external)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Models / checkpoints
+*.pt
+*.pth
+checkpoints/
+
+# Node / web app
+app/node_modules/
+app/dist/
+app/.vite/
+
+# Capacitor / Android (added later)
+app/android/
+app/ios/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json

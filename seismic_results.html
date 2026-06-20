@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Seismic Deep Learning · Results</title>
+<style>
+  :root{--bg:#0d1119;--bg2:#121826;--line:#26304a;--text:#e8ecf5;--muted:#9aa7c4;
+        --accent:#534AB7;--good:#34d399;--warn:#ffb347;--bad:#ff5a4d;
+        --mono:"IBM Plex Mono",ui-monospace,monospace;--body:"Inter",system-ui,sans-serif;}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);line-height:1.6}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 24px 80px}
+  h1{font-size:clamp(28px,5vw,44px);margin:0 0 8px;letter-spacing:-.02em}
+  h2{font-size:22px;margin:40px 0 14px;border-top:1px solid var(--line);padding-top:28px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 14px}
+  .lede{font-size:18px;color:var(--muted);max-width:64ch}
+  p{max-width:72ch;color:#cdd5ea}
+  img{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff;margin:8px 0 6px}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:14px;margin:10px 0}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+  .win{color:var(--good);font-weight:600}.tie{color:var(--warn);font-weight:600}
+  .pill{font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--line)}
+  .grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:680px){.grid{grid-template-columns:repeat(3,1fr)}}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h3{margin:0 0 6px;font-size:15px}.card p{font-size:13px;color:var(--muted);margin:0}
+  .disclaimer{border-left:2px solid var(--accent);padding-left:14px;color:var(--muted);font-size:14px;margin-top:36px}
+  code{font-family:var(--mono);font-size:13px;color:#cdd5ea}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Earthquake ML · California SCEDC network</p>
+  <h1>Seismic deep learning that earns its keep</h1>
+  <p class="lede">A shared CNN + GNN + Transformer backbone for earthquake <strong>detection</strong>,
+    <strong>magnitude</strong>, and <strong>early warning</strong> — evaluated honestly against the
+    classic seismology baselines, on real waveform data.</p>
+
+  <h2>The pivot — why this works when the first attempt didn't</h2>
+  <p>The project began as near-term earthquake <em>prediction</em> from geomagnetic (INTERMAGNET)
+    data. Under leakage-safe, confounder-controlled validation that approach showed
+    <strong>no out-of-sample skill</strong> — consistent with the contested science. The model was
+    never the problem; the data carried no signal. Pointed instead at <strong>seismic waveforms</strong>,
+    the <em>same</em> architecture goes from chance to the results below. The lesson:
+    deep learning wins where the task is genuine pattern recognition — and is honest where a simple
+    physics formula already suffices.</p>
+
+  <h2>Results vs. classic baselines</h2>
+  <img src="figures/seismic_results.png" alt="Deep model vs classic baselines across four tasks" />
+  <table>
+    <thead><tr><th>Task</th><th>Deep model</th><th>Classic baseline</th><th>Outcome</th></tr></thead>
+    <tbody>
+      <tr><td>Detection</td><td>AUC 0.988</td><td>STA/LTA 0.625</td><td class="win">Deep wins, decisively</td></tr>
+      <tr><td>Magnitude (hybrid)</td><td>R² 0.771</td><td>amp+dist 0.690</td><td class="win">Deep wins</td></tr>
+      <tr><td>EEW · PGV regression</td><td>R² 0.728</td><td>early-amp+dist 0.720</td><td class="tie">Tie</td></tr>
+      <tr><td>EEW · shaking alert</td><td>recall 0.65 · MCC 0.739</td><td>0.55 · 0.686</td><td class="win">Deep wins (recall)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What each model does</h2>
+  <div class="grid">
+    <div class="card"><h3>Detection <span class="pill">CNN+Transformer</span></h3>
+      <p>Is an earthquake present in a 30 s window? Learns waveform morphology a threshold detector can't. AUC 0.988 vs 0.625.</p></div>
+    <div class="card"><h3>Magnitude <span class="pill">+GNN</span></h3>
+      <p>Network magnitude from multi-station 3-component traces (response-removed). The GNN over the station graph adds real value: R² 0.57 all-stations vs 0.25 single-station.</p></div>
+    <div class="card"><h3>Early warning <span class="pill">EEW</span></h3>
+      <p>From the first 8 s of P-wave, predict the peak shaking that arrives later. Ties the physics on the value, and catches ~10 points more strong-shaking events.</p></div>
+  </div>
+
+  <h2>Honest framing</h2>
+  <p>The deep model <strong>does not</strong> beat the physics where the task <em>is</em> physics
+    (raw PGV value ≈ early-amplitude + distance) — there it ties. It <strong>does</strong> win where
+    the task needs learned pattern recognition (detection) or a better operating-point trade-off
+    (alerting), and the hybrid magnitude head beats the baseline by adding waveform information
+    <em>on top of</em> the amplitude–distance physics. Every number is an out-of-sample,
+    chronological-split result with the classic baseline shown alongside — no in-sample or
+    cherry-picked-seed figures (the EEW numbers are 5-seed ensembles).</p>
+
+  <p class="disclaimer"><strong>Scope &amp; honesty.</strong> California SCEDC, ~800 events / 5–10
+    broadband stations, magnitudes 3.5–7.1. This is a research prototype demonstrating the
+    architecture on real data, not an operational warning system. Short-term earthquake
+    <em>prediction</em> (will one occur) remains unsolved; this work does detection, characterization,
+    and seconds-ahead shaking estimation — the parts that are tractable.</p>
+</div>
+</body>
+</html>

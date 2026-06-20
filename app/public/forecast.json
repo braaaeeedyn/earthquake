@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "region": "California (SCEDC network) — project pivoted to seismic models",
+  "generated_at": "2026-06-20T00:00:00+00:00",
+  "horizon_days": 7,
+  "probability": 0.0,
+  "label": "unlikely",
+  "confidence": "low",
+  "is_placeholder": true,
+  "model_version": "geomagnetic-precursor-RETIRED",
+  "stations": [
+    "FRN",
+    "TUC",
+    "BOU",
+    "NEW"
+  ],
+  "disclaimer": "The geomagnetic precursor forecast was RETIRED: under leakage-safe, confounder-controlled validation it showed no out-of-sample skill (the data carries no precursor signal). The project pivoted to seismic-waveform deep learning — detection (AUC 0.988), magnitude (R2 0.771), and early warning (alert recall 0.65) on real California network data. See seismic_results.html for the honest results. This is a research prototype, not an operational system."
+}

@@ -1,0 +1,5 @@
+# Phase 4+ model dependencies. Installed separately to keep the pipeline lightweight.
+-r requirements.txt
+torch>=2.2
+scikit-learn>=1.4
+matplotlib>=3.8
