@@ -239,6 +239,10 @@ is deferred (needs a dataset rebuild + retrain of the magnitude/EEW models).
   Honest caveats baked into the emails: SeedLink latency is seconds-to-tens (RAPID detection, not
   sub-second pre-arrival warning), and event **location is a proxy** (strongest-triggering station,
   not a real locator) → distance/shaking are estimates. Needs an always-on host to actually run.
+  **(2026-07-07) `server.py` now AUTO-SPAWNS `live_watch.py` as a child process — it is THE alert
+  daemon for "Alert me near me". USGS is no longer used for alerts, only for the `/api/ca`
+  largest-quakes display. `nearme_watch.py` is retired from alerting (its USGS poll loop is unused);
+  `server.py` still imports its helpers (`fetch_usgs`/`load_json`/`send_email`/`SUBS`).**
 - **`scripts/shaking_model.py` (NEW).** magnitude+distance → estimated MMI + description + alert
   decision (`estimate_mmi`, `describe`, `should_alert`). Used by both `live_watch.py` and the
   (legacy) `nearme_watch.py`, which was upgraded from a felt-radius decision to a shaking-based one.
@@ -261,6 +265,23 @@ is deferred (needs a dataset rebuild + retrain of the magnitude/EEW models).
   design). Nav badge now reads **"live · SeedLink"** (was USGS). Names updated app-wide.
 - **Secrets/PII:** `.env` (SMTP) and now **`data/subscribers.json`** are gitignored — subscriber
   emails must not be committed.
+
+### Next steps (prioritized, decided 2026-07-07)
+Direction after wiring `live_watch.py` as the auto-spawned alert daemon. Roughly in order:
+1. **Deploy the stack to an always-on host.** The alert product only watches while running;
+   `live_watch.py` needs continuous SeedLink + an always-on process (`server.py` now auto-spawns it).
+   Hosting is the only blocker between demo and working product. Needs: a small always-on VM, SMTP
+   creds in the host env, and a decision on whether the watcher auto-restarts when the stream drops
+   (today it exits and the API keeps serving).
+2. **Build the "replay a real earthquake" mode** (the locked demo TODO). Pick a historical CA event →
+   walk it Detect → Size → Warn, showing the alert fire + LEAD TIME. Exercises all three models on one
+   real event; self-contained, no hosting. Highest demonstration payoff.
+3. **Seed-averaged magnitude R² with a CI** (rigor debt). R² swung 0.57 → 0.77 → 0.85 across runs; the
+   app shows the best single number. Report mean ± CI across seeds — small script change, matches the
+   project's honest-demo framing.
+4. Polish/scope (lower priority): add `@fontsource` nunito/inter/geist-mono for design fidelity on
+   Windows; wire the EEW/PGV deep model into alert emails (shaking is currently the mag/dist formula,
+   not the trained net); statewide coverage (needs a dataset rebuild + magnitude/EEW retrain).
 
 ### Gotchas
 - Real data is heavily imbalanced (earthquakes rare) — always report precision/recall/F1

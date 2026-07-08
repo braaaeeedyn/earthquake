@@ -8,6 +8,7 @@ the browser only sends {name, email, lat, lon}. Run alongside the app:
   cd app && npm run dev               # http://localhost:5173  (proxies /api -> :8000)
 """
 import json
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -19,7 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import quake_archive  # noqa: E402
-from nearme_watch import SUBS, felt_radius_km, fetch_usgs, load_json, send_email  # noqa: E402
+from nearme_watch import SUBS, fetch_usgs, load_json, send_email  # noqa: E402
 
 PORT = 8000
 # Southern California only (the trained network's region): lat_min, lat_max, lon_min, lon_max
@@ -92,17 +93,17 @@ def send_confirmation(entry):
     Runs best-effort in a background thread so a slow/failed SMTP call never blocks or
     breaks the /api/subscribe response. Falls back to a console print when SMTP isn't
     configured (same behaviour as the watcher's send_email)."""
-    radius = felt_radius_km(4.0)  # illustrate the "near" radius for a typical felt quake
     subject = "You're subscribed to earthquake alerts"
     body = (
         f"Hi {entry['name']},\n\n"
         f"You're now signed up for earthquake alerts at your location "
         f"(lat {entry['lat']:.4f}, lon {entry['lon']:.4f}).\n\n"
-        f"We'll email you whenever a quake lands within a magnitude-scaled radius of this "
-        f"spot, so bigger quakes reach further (for example, about {radius:.0f} km for a "
-        f"magnitude 4 event).\n\n"
+        f"Our models watch the live Southern California seismic stream. When they detect a "
+        f"quake and expect at least felt-level shaking where you are, we'll email you the "
+        f"detection, its estimated size, and how hard it's likely to shake.\n\n"
         f"No action is needed. You'll only hear from us when a nearby quake happens.\n\n"
-        f"(Research prototype, not an official warning. Source: USGS.)"
+        f"(Research prototype, not an official warning. Rapid detection from live seismic "
+        f"data, not sub-second pre-arrival warning.)"
     )
     try:
         send_email(entry["email"], subject, body, dry_run=False)
@@ -220,6 +221,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def start_live_watcher():
+    """Spawn the live SeedLink + model alert daemon so 'near me' alerts come from the trained
+    detection/magnitude nets on the live stream -- never from USGS. Runs as a child process, so a
+    stream/network failure in the watcher never affects this API. USGS is used only for the
+    largest-quakes display (/api/ca)."""
+    script = ROOT / "scripts" / "live_watch.py"
+    try:
+        proc = subprocess.Popen([sys.executable, str(script)])
+        print(f"live alert watcher (SeedLink + models) started, pid {proc.pid}")
+        return proc
+    except Exception as e:                               # a watcher that won't start shouldn't kill the API
+        print(f"could not start live_watch.py ({e!r}); API runs, but no live alerts")
+        return None
+
+
 if __name__ == "__main__":
+    watcher = start_live_watcher()
     print(f"near-me backend on http://localhost:{PORT}  (POST /api/subscribe, GET /api/events)")
-    ThreadingHTTPServer(("localhost", PORT), Handler).serve_forever()
+    server = ThreadingHTTPServer(("localhost", PORT), Handler)
+    try:
+        server.serve_forever()
+    finally:
+        if watcher and watcher.poll() is None:          # take the watcher down with the API
+            watcher.terminate()
