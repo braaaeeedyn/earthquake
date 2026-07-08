@@ -33,3 +33,10 @@ Thumbs.db
 
 # Claude Code local settings (personal, not shared)
 .claude/settings.local.json
+
+# Secrets — never commit. SMTP creds for the near-me email alerts live here.
+.env
+.env.local
+
+# Subscriber list holds personal contact info (name/email/location) — keep local, don't commit.
+data/subscribers.json

@@ -1,34 +1,34 @@
 {
   "project": "Seismic deep learning",
   "model": "CNN + GNN + Transformer (shared backbone)",
-  "generated_at": "2026-06-20",
+  "generated_at": "2026-07-06",
   "dataset": {
     "events": 794,
     "stations": 10,
     "mag_min": 3.5,
     "mag_max": 7.1,
-    "region": "California (SCEDC network)"
+    "region": "Southern California (SCEDC network)"
   },
   "tasks": [
     {
       "key": "detection",
       "name": "Detection",
       "metric": "ROC-AUC",
-      "deep": 0.988,
-      "baseline": 0.625,
+      "deep": 0.977,
+      "baseline": 0.605,
       "baseline_name": "STA/LTA",
       "winner": "deep",
-      "desc": "Is an earthquake present in a 30-second window? The CNN+Transformer learns waveform morphology a classic threshold detector can't."
+      "desc": "Is an earthquake present in a 30-second window? The CNN+Transformer learns waveform morphology a classic threshold detector can't. 5-seed mean AUC 0.977±0.003 on held-out data."
     },
     {
       "key": "magnitude",
       "name": "Magnitude",
       "metric": "R²",
-      "deep": 0.771,
+      "deep": 0.846,
       "baseline": 0.690,
       "baseline_name": "amp + distance",
       "winner": "deep",
-      "desc": "Network magnitude from multi-station 3-component traces. The GNN over the station graph adds real value (R² 0.57 multi-station vs 0.25 single-station)."
+      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.846; the multi-station GNN fusion earns it — a nearest-single-station ablation collapses to R² −0.17."
     },
     {
       "key": "eew_reg",
@@ -43,12 +43,12 @@
     {
       "key": "eew_alert",
       "name": "Early warning · alert",
-      "metric": "recall",
-      "deep": 0.65,
-      "baseline": 0.55,
+      "metric": "MCC",
+      "deep": 0.760,
+      "baseline": 0.655,
       "baseline_name": "GMPE-style",
       "winner": "deep",
-      "desc": "Will shaking exceed a notable threshold? The deep model catches ~10 points more strong-shaking events — the metric that matters for early warning."
+      "desc": "Will shaking exceed a notable threshold? With the alert trigger tuned on validation for recall, the deep model catches 76% of strong-shaking events (up from 65%) at 82% precision. The baseline reaches similar recall only by false-alarming twice as often, so on balanced alert quality (MCC) the deep model wins 0.76 vs 0.66."
     }
   ],
   "stations": ["CCC", "CLC", "TOW2", "WBM", "PASC", "SVD", "RIO", "MWC", "DGR", "BAK"],

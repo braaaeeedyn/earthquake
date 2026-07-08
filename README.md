@@ -1,115 +1,114 @@
-# Earthquake Forecasting App
+# SeismicSoCal ML
 
-Near-term (7-day) earthquake forecasting from geomagnetic (INTERMAGNET) sensor data,
-fused through CNN + GNN + Transformer sub-models, surfaced to the public through a
-simple cross-platform app (web first, Android later via Capacitor).
+Deep-learning seismology for **Southern California**: detect an earthquake, size it, and warn —
+each shown working on real held-out SCEDC waveforms and against the classic seismology baseline —
+plus a **live detection daemon** that runs the models on a real-time station stream and emails
+nearby subscribers.
 
-> **Honest disclaimer.** Near-term earthquake prediction from geomagnetic precursors is
-> scientifically contested. This is a research prototype. Public-facing claims are
-> deliberately hedged and validation is conservative.
-
----
-
-## Repository layout
-
-```
-Earthquake/
-├── src/eq/              # Python package
-│   ├── config.py        # LOCKED labeling / preprocessing / graph / split rules (single source of truth)
-│   ├── pipeline.py      # deterministic raw -> labeled 24x27 matrices -> chronological splits
-│   ├── graph.py         # station adjacency (haversine + Gaussian kernel)
-│   ├── synthetic.py     # synthetic INTERMAGNET + quake catalog (dev/test fixture with learnable signal)
-│   ├── data/            # REAL data acquisition (Phase 3)
-│   │   ├── usgs.py        # USGS FDSN earthquake catalog
-│   │   ├── intermagnet.py # INTERMAGNET GIN web service + IAGA-2002 parser
-│   │   └── real.py        # western-US cluster -> readings/catalog (relaxed proximity/graph rules)
-│   └── models/          # CNN, GNN, Transformer, fusion + data/metrics/train/evaluate (Phase 4-5)
-├── tests/               # pytest suite (run: pytest)
-├── scripts/             # build_dataset.py, train_models.py (synthetic), eval_real.py (real), make_forecast.py
-├── app/                 # React + Vite web app (Capacitor-ready for Android)
-├── progress.html        # standalone build-progress dashboard (light/dark)
-├── data/raw/            # raw INTERMAGNET / USGS, cached (gitignored)
-└── data/processed/      # materialized datasets (gitignored)
-```
-
-## Build phases (each is independently testable)
-
-| Phase | Deliverable | Status | How to test |
-|------|-------------|--------|-------------|
-| 1 | Data pipeline + synthetic fixture | ✅ | `pytest` |
-| 2 | Web app surface (reads `forecast.json`) | ✅ | `cd app && npm run dev` |
-| 4 | CNN, GNN, Transformer, fusion | ✅ | overfit-one-batch tests; `python scripts/train_models.py` |
-| 3 | Real INTERMAGNET + USGS behind same interface | ✅ | `python scripts/eval_real.py` (fetches + caches real data) |
-| 5 | Evaluation vs 60% baseline (recall-focused, CIs) | 🔄 | repeated-seed mean ± 95% CI in `eval_real.py` |
-| 6 | Wire real inference into app + figures for Dr. Sanders | ⬜ | end-to-end run |
-
-> Real observatories are sparse, so the real cluster (Fresno, Tucson, Boulder, Newport)
-> **relaxes** the locked SoCal-cluster rules: `proximity_km` is swept over {500, 700, 1000} km
-> and graph distances are widened so the far-apart stations stay connected. See `src/eq/data/real.py`.
+> **Honest disclaimer.** This is a research prototype, not an official warning system. Short-term
+> earthquake *prediction* (whether one will occur) remains unsolved; this does detection,
+> characterization, and rapid shaking estimation. See "Honesty notes" below.
 
 ---
 
-## Quick start
+## Background: the pivot
 
-### Python pipeline (Phase 1)
+The project began as near-term earthquake *forecasting* from geomagnetic (INTERMAGNET) data. On
+real data that thesis came up **null** (superposed-epoch p=0.83, ROC ≈ chance) — exactly as the
+literature predicts. That track is retired but kept as a rigorous replication/null result. Work
+pivoted to **seismic-waveform deep learning**, where the same CNN/GNN/Transformer architecture
+genuinely works. The `src/eq/` geomagnetic pipeline remains for the record.
 
-```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt
-.venv/Scripts/python -m pytest -q                 # run the test suite
-.venv/Scripts/python scripts/build_dataset.py     # materialize a (synthetic) dataset
-.venv/Scripts/python scripts/make_forecast.py     # emit app/public/forecast.json (placeholder until models exist)
-```
+## The three models (Detect → Size → Warn)
 
-### Models & real data (Phase 3-5)
+Real numbers, out-of-sample on held-out SCEDC data (10-station SoCal network, 794 events):
 
-```bash
-.venv/Scripts/python -m pip install -r requirements-ml.txt  # torch, scikit-learn, matplotlib
-.venv/Scripts/python scripts/train_models.py   # train CNN/GNN/Transformer/fusion on synthetic (with CIs)
-.venv/Scripts/python scripts/eval_real.py      # fetch real INTERMAGNET+USGS, sweep proximity, report CIs
-```
+| Task | Model | Baseline | Verdict |
+|------|-------|----------|---------|
+| **Detect** — is it a quake? | CNN+Transformer, AUC **0.977** | STA/LTA 0.605 | deep wins decisively |
+| **Size** — how big? | multi-station GNN, R² **0.846** | amp+dist 0.690 | deep wins (nearest-1-station ablation → R² −0.17) |
+| **Warn** — how hard will it shake? | EEW ensemble, alert **MCC 0.760** | GMPE-style 0.655 | deep wins (recall 0.76 @ precision 0.82) |
 
-The first `eval_real.py` run downloads ~3 years of minute data for 4 observatories (cached
-under `data/raw/`, resumable). No credentials needed — INTERMAGNET adj-or-rep data and the
-USGS catalog are public.
-
-### Web app (Phase 2)
+Reproducible one-command demos (train-once-and-cache):
 
 ```bash
-cd app
-npm install
-npm run dev        # open the printed http://localhost:5173
+.venv/Scripts/python scripts/demo_detect.py       # detection vs STA/LTA
+.venv/Scripts/python scripts/demo_magnitude.py    # 5-seed magnitude ensemble
+.venv/Scripts/python scripts/demo_eew.py          # early-warning ensemble (val-tuned alert)
 ```
 
-The web app fetches `forecast.json` and renders the 7-day status. The same build later
-becomes an Android app via Capacitor (`npx cap add android`) with no code changes.
+## Live alert daemon — `scripts/live_watch.py`
+
+The models run **continuously on a live waveform stream** (USGS bypassed):
+
+```
+SeedLink stream (10 CI/SCEDC SoCal stations)  ->  rolling per-station buffers
+  ->  DETECTION model on sliding 30 s windows, continuously
+  ->  COINCIDENCE: event declared only when >= K stations agree within ~12 s  (kills false alarms)
+  ->  location proxy + deep MAGNITUDE ensemble sizes it
+  ->  subscribers whose estimated shaking clears a threshold get emailed detection + size + shaking
+```
+
+```bash
+.venv/Scripts/python scripts/live_watch.py --selftest   # deterministic pipeline check (dry-run)
+.venv/Scripts/python scripts/live_watch.py --replay     # verify detection + sizing on cached events
+.venv/Scripts/python scripts/live_watch.py              # LIVE (needs an always-on host + network)
+```
+
+## Web console — `app/`
+
+React + Vite. `npm run dev`, opens on `localhost:5173`.
+
+- **Hero** with a mouse-reactive synthetic seismograph.
+- **Detect / Size / Warn** as an auto-cycling card carousel (7 s, pause, prev/next, shared "Evidence"
+  disclosures with the demo figures + a technical paragraph for Size and Warn).
+- **Biggest Southern California quakes** — a second carousel cycling Day / Week / Month / Year /
+  All time, live from the USGS FDSN catalog, each row linking to its `sms-tsunami-warning.com` page.
+- **Alert me near me** — subscribe with a Southern-California location (city + state search geocodes
+  to lat/lon, or use my location). The backend collects subscribers; the daemon does the alerting.
+
+Run the full stack:
+
+```bash
+.venv/Scripts/python scripts/server.py    # backend on :8000 (subscribe, CA feed, geocode)
+cd app && npm run dev                      # frontend on :5173, proxies /api -> :8000
+.venv/Scripts/python scripts/live_watch.py # the live detector/alerter (separate always-on process)
+```
+
+Email needs `SMTP_USER` / `SMTP_PASS` in a gitignored `.env` (Gmail app password). Without them the
+alert paths print instead of send. See `.env.example`.
 
 ---
 
-## Locked rules (MVP §3.1) — see `src/eq/config.py`
+## Honesty notes
 
-- **Magnitude threshold:** M ≥ 5.0 counts as a target event.
-- **Proximity:** within 300 km of *any* cluster station.
-- **Horizon:** earthquake in the next **7 days**.
-- **Matrix:** trailing **27 days × 24 hours** of hourly-averaged field, per station.
-- **Splits:** chronological 70/15/15 with a **34-day embargo** (= 27 + 7) between splits
-  so no input/label window straddles a split boundary (leakage-safe).
-- **Graph:** stations within 500 km connected, edge weight `exp(-d²/2σ²)`, σ = 300 km.
+- **Coverage is the 10 SoCal stations the magnitude/EEW models were trained on.** Statewide needs a
+  dataset rebuild + retrain (deferred).
+- **Latency:** SeedLink is seconds-to-tens-of-seconds, so this is *rapid detection*, not sub-second
+  pre-arrival warning (that's what ShakeAlert does on a dedicated low-latency pipeline).
+- **Location is a proxy** (the strongest-triggering station), not a true locator, so distance and
+  shaking are estimates. A real associator/locator is the natural next step.
+- The magnitude regressor **underpredicts the very largest events** (a known trait); mid-range is closer.
+- The "Biggest SoCal quakes" browser and the largest-quake links use the **USGS catalog** (real, but
+  it's catalog metadata — the models don't produce those).
 
-## Forecast contract (`app/public/forecast.json`)
+## Repository layout (current)
 
-```json
-{
-  "schema_version": 1,
-  "region": "string",
-  "generated_at": "ISO-8601 UTC",
-  "horizon_days": 7,
-  "probability": 0.0,
-  "label": "likely | unlikely",
-  "confidence": "low | medium | high",
-  "is_placeholder": true,
-  "model_version": "string",
-  "stations": ["CODE", "..."],
-  "disclaimer": "string"
-}
 ```
+scripts/
+  demo_detect.py / demo_magnitude.py / demo_eew.py   # reproducible per-model demos
+  seismic_train.py / seismic_train_multi.py / seismic_eew*.py  # model definitions + training
+  live_watch.py        # LIVE SeedLink daemon: detect -> coincidence -> size -> alert
+  shaking_model.py     # magnitude/distance -> estimated shaking (MMI) + alert decision
+  nearme_watch.py      # USGS-triggered near-me watcher (legacy path) + email
+  quake_archive.py     # per-day top-5 archive (min-heap), used by the largest-quakes feature
+  server.py            # stdlib backend: /api/subscribe, /api/ca, /api/geocode
+src/eq/                # retired geomagnetic pipeline (null result, kept for the record)
+app/                   # React + Vite console
+data/processed/        # datasets (.npz) + model checkpoints (.pt) + result JSONs (gitignored)
+figures/               # demo figures
+tests/                 # pytest (pipeline + overfit-one-batch per sub-model)
+```
+
+Datasets/checkpoints and `data/subscribers.json` are gitignored. Rebuild seismic data with
+`scripts/seismic_build*.py` (first run is network-bound via ObsPy/SCEDC).
