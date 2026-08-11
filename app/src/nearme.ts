@@ -1,4 +1,15 @@
-// Near-me subscribe API + largest-quake archive — talks to scripts/server.py via the Vite /api proxy.
+// Near-me subscribe API + largest-quake archive — talks to scripts/server.py.
+// On web the Vite dev server proxies /api -> :8000. In the packaged Android app there is no
+// proxy, so calls must hit an absolute base: the emulator reaches the host at 10.0.2.2, and a
+// real device / deployment sets VITE_API_BASE at build time.
+
+import { Capacitor } from '@capacitor/core'
+
+const API_BASE = Capacitor.isNativePlatform()
+  ? ((import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://10.0.2.2:8000')
+  : ''
+
+const api = (path: string) => API_BASE + path
 
 export interface UsgsEvent {
   id: string
@@ -18,7 +29,7 @@ export interface DayTop {
 }
 
 export async function subscribe(sub: { name: string; email: string; lat: number; lon: number }) {
-  const res = await fetch('/api/subscribe', {
+  const res = await fetch(api('/api/subscribe'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(sub),
@@ -28,23 +39,35 @@ export async function subscribe(sub: { name: string; email: string; lat: number;
   return data as { ok: boolean; count: number; note?: string }
 }
 
+// Register this device's FCM token + location for push alerts (mobile app only).
+export async function registerPushToken(p: { token: string; lat: number; lon: number; name: string }) {
+  const res = await fetch(api('/api/register-push'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+  return data as { ok: boolean; count: number }
+}
+
 // Today's live top-5 (also folds the current USGS feed into the server-side daily archive).
 export async function todayTop(): Promise<DayTop> {
-  const res = await fetch('/api/events')
+  const res = await fetch(api('/api/events'))
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()) as DayTop
 }
 
 // The list of dates the archive holds (newest first).
 export async function archiveDates(): Promise<string[]> {
-  const res = await fetch('/api/archive')
+  const res = await fetch(api('/api/archive'))
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()).dates as string[]
 }
 
 // A specific past day's top-5.
 export async function archiveDay(date: string): Promise<DayTop> {
-  const res = await fetch(`/api/archive?date=${encodeURIComponent(date)}`)
+  const res = await fetch(api(`/api/archive?date=${encodeURIComponent(date)}`))
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()) as DayTop
 }
@@ -57,14 +80,25 @@ export interface CaWindow {
 }
 
 export async function caTop(window: string): Promise<CaWindow> {
-  const res = await fetch(`/api/ca?window=${encodeURIComponent(window)}`)
+  const res = await fetch(api(`/api/ca?window=${encodeURIComponent(window)}`))
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return (await res.json()) as CaWindow
 }
 
+// Whether the live SeedLink watcher is connected (drives the green "live" dot in the nav).
+export async function liveStatus(): Promise<boolean> {
+  try {
+    const res = await fetch(api('/api/status'))
+    if (!res.ok) return false
+    return Boolean((await res.json()).live)
+  } catch {
+    return false
+  }
+}
+
 // Turn a place name into coordinates (server-side geocode).
 export async function geocode(q: string): Promise<{ lat: number; lon: number; name: string }> {
-  const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`)
+  const res = await fetch(api(`/api/geocode?q=${encodeURIComponent(q)}`))
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
   return data as { lat: number; lon: number; name: string }

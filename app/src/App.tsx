@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
-import { subscribe, caTop, geocode, type UsgsEvent, type CaWindow } from './nearme'
+import { subscribe, caTop, geocode, liveStatus, type UsgsEvent, type CaWindow } from './nearme'
+import { enablePush, initPush, isNativeApp } from './push'
 
 type State =
   | { status: 'loading' }
@@ -28,23 +29,29 @@ const ROWS = [
 
 export default function App() {
   const [state, setState] = useState<State>({ status: 'loading' })
+  const [live, setLive] = useState(false)
 
   useEffect(() => {
     let active = true
     loadSeismic()
       .then((data) => active && setState({ status: 'ready', data }))
       .catch((e) => active && setState({ status: 'error', message: String(e?.message ?? e) }))
+    initPush()          // register foreground push handlers (no-op on web)
+    const checkLive = () => liveStatus().then((v) => active && setLive(v))
+    checkLive()
+    const id = setInterval(checkLive, 15000)   // poll the SeedLink watcher status
     return () => {
       active = false
+      clearInterval(id)
     }
   }, [])
 
   return (
     <div className="app">
       <nav className="nav">
-        <span className="brand">SeismicSoCal&nbsp;ML</span>
+        <span className="brand">SeismicSoCal</span>
         <span className="live">
-          <span className="dot" aria-hidden /> live · SeedLink
+          <span className={`dot ${live ? 'on' : ''}`} aria-hidden /> {live ? 'live · SeedLink' : 'offline · SeedLink'}
         </span>
       </nav>
 
@@ -72,11 +79,11 @@ function Console({ data }: { data: Seismic }) {
   return (
     <>
       <section className="hero">
-        <p className="eyebrow">Earthquake ML · {d.region}</p>
-        <h1>SeismicSoCal ML</h1>
+        <p className="eyebrow">Earthquake ML · Southern California</p>
+        <h1>SeismicSoCal</h1>
         <p className="hero-sub">
-          Detect an earthquake, size it, and warn, each tested against the classic seismology
-          baseline on real held-out Southern California waveforms.
+          Three deep models on real held-out waveforms, each tested against the classic
+          seismology baseline.
         </p>
         <Trace />
         <div className="meta">
@@ -89,10 +96,9 @@ function Console({ data }: { data: Seismic }) {
 
       <Carousel data={data} />
 
+      <NearMe />
 
       <CaLargest />
-
-      <NearMe />
     </>
   )
 }
@@ -290,27 +296,40 @@ function Trace() {
       pathRef.current?.setAttribute('d', d)
     }
 
-    const onMove = (e: MouseEvent) => {
+    // Desktop (fine pointer) reacts to the cursor's proximity. Touch devices have no hover, so on
+    // a coarse pointer the trace self-animates instead: a slow, continuous low -> high -> low pulse.
+    const coarse = window.matchMedia('(pointer: coarse)').matches
+
+    const setTargetFrom = (cx: number, cy: number) => {
       const el = svgRef.current
       if (!el) return
       const r = el.getBoundingClientRect()
-      const dx = Math.max(r.left - e.clientX, 0, e.clientX - r.right)
-      const dy = Math.max(r.top - e.clientY, 0, e.clientY - r.bottom)
+      const dx = Math.max(r.left - cx, 0, cx - r.right)
+      const dy = Math.max(r.top - cy, 0, cy - r.bottom)
       target.current = Math.max(0, 1 - Math.hypot(dx, dy) / 420) // within ~420px it starts waking up
     }
-    window.addEventListener('mousemove', onMove)
+    const onMove = (e: MouseEvent) => setTargetFrom(e.clientX, e.clientY)
+    if (!coarse) window.addEventListener('mousemove', onMove)
+    const unbind = () => window.removeEventListener('mousemove', onMove)
 
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       frame(0, 0)
-      return () => window.removeEventListener('mousemove', onMove)
+      return unbind
     }
 
     let raf = 0
     let phase = 0
+    let elapsed = 0
     let last = performance.now()
+    const PULSE = 3.2 // seconds for one low -> high -> low cycle on touch devices
     const loop = (t: number) => {
       const dt = Math.min((t - last) / 1000, 0.05)
       last = t
+      if (coarse) {
+        // autonomous breathing: calm/low (~0.12) up to a big swell (~0.9) and back, forever
+        elapsed += dt
+        target.current = 0.12 + 0.78 * (0.5 - 0.5 * Math.cos((elapsed / PULSE) * Math.PI * 2))
+      }
       level.current += (target.current - level.current) * Math.min(1, dt * 5) // ease toward target
       phase += (0.6 + level.current * 5) * dt // faster wobble when agitated (accumulated -> no jumps)
       frame(phase, level.current)
@@ -319,7 +338,7 @@ function Trace() {
     raf = requestAnimationFrame(loop)
     return () => {
       cancelAnimationFrame(raf)
-      window.removeEventListener('mousemove', onMove)
+      unbind()
     }
   }, [])
 
@@ -420,6 +439,7 @@ function CaLargest() {
         <div>
           <p className="eyebrow">Largest earthquakes</p>
           <h2>Biggest Southern California quakes</h2>
+          <p className="source-note">Source: USGS Earthquake Catalog</p>
         </div>
       </div>
       <div className="carousel-tabs" role="tablist">
@@ -514,7 +534,15 @@ function NearMe() {
     setMsg(null)
     try {
       const r = await subscribe({ name: form.name, email: form.email, lat: Number(form.lat), lon: Number(form.lon) })
-      setMsg({ kind: 'ok', text: r.note ?? `Subscribed — you’re #${r.count} on the watch list.` })
+      let text = r.note ?? `Subscribed — you’re #${r.count} on the watch list.`
+      // On the mobile app, also register this device for push alerts.
+      try {
+        const pushed = await enablePush({ name: form.name, lat: Number(form.lat), lon: Number(form.lon) })
+        if (pushed) text += ' Push alerts enabled on this device.'
+      } catch (pErr) {
+        text += ` (Email set; push couldn’t be enabled: ${(pErr as Error).message}.)`
+      }
+      setMsg({ kind: 'ok', text })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}. Is the backend running?` })
     } finally {
@@ -530,6 +558,7 @@ function NearMe() {
         A model watches the live Southern California seismic stream and, when it detects a quake
         near you, emails you the detection, its size, and how hard it is likely to shake. This is
         rapid detection, not an official warning.
+        {isNativeApp() && ' On this app, alerts also arrive as push notifications.'}
       </p>
 
       <div className="card">

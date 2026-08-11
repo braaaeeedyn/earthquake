@@ -34,6 +34,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
+import push_fcm  # noqa: E402
 import shaking_model  # noqa: E402
 from nearme_watch import SUBS, haversine_km, load_json, send_email  # noqa: E402
 
@@ -159,6 +160,26 @@ def alert_subscribers(subs, epi_lat, epi_lon, mag, det_conf, nstations, dry_run)
     return sent
 
 
+def alert_push_devices(tokens, epi_lat, epi_lon, mag, det_conf, nstations, dry_run):
+    """Push every mobile device whose estimated shaking reaches the threshold. Mirrors
+    alert_subscribers (same shaking gate) but sends a short FCM notification. Returns count sent."""
+    sent = 0
+    for t in tokens:
+        if mag is None:
+            continue                                  # no size -> no shaking-based decision
+        dist = haversine_km(epi_lat, epi_lon, t["lat"], t["lon"])
+        mmi = shaking_model.estimate_mmi(mag, dist)
+        if mmi < ALERT_MMI:
+            continue
+        label, _ = shaking_model.describe(mmi)
+        title = f"M{mag:.1f} quake detected — {label.lower()} shaking"
+        body = (f"~{dist:.0f} km away. Estimated intensity {round(mmi)}/10. "
+                f"Detected on {nstations} stations. Research prototype, not an official warning.")
+        if push_fcm.send_push(t["token"], title, body, dry_run):
+            sent += 1
+    return sent
+
+
 # ---------------------------------------------------------------- live SeedLink
 
 def run_live(args):
@@ -211,9 +232,12 @@ def run_live(args):
                 mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
                     if mag_models else None
                 nsent = alert_subscribers(subs, epi_lat, epi_lon, mag, conf, len(stas), args.dry_run)
+                # reload device tokens each event so mobile users who just signed up are covered
+                psent = alert_push_devices(push_fcm.load_tokens(), epi_lat, epi_lon, mag, conf,
+                                           len(stas), args.dry_run)
                 msize = f"M{mag:.1f}" if mag is not None else "size n/a"
                 print(f"[EVENT] {len(stas)} stations, near {names[strongest]} "
-                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {nsent} subscriber(s) alerted")
+                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {nsent} email + {psent} push alerted")
 
     class Client_(EasySeedLinkClient):
         def on_data(self, trace):
@@ -301,7 +325,11 @@ def selftest(args):
     print(f"[selftest] declared event near {stations[strongest]}, placed M{mag} "
           f"~{haversine_km(epi_lat, epi_lon, s0['lat'], s0['lon']):.0f} km from {s0['name']}")
     n = alert_subscribers(subs, epi_lat, epi_lon, mag, 0.95, args.min_stations, dry_run=True)
-    print(f"[selftest] {n} subscriber(s) would be alerted (dry-run)")
+    print(f"[selftest] {n} subscriber(s) would be emailed (dry-run)")
+    # exercise the push path too: a fabricated device co-located with subscriber[0]
+    fake = [{"token": "selftest-token", "lat": s0["lat"], "lon": s0["lon"], "name": s0["name"]}]
+    p = alert_push_devices(fake, epi_lat, epi_lon, mag, 0.95, args.min_stations, dry_run=True)
+    print(f"[selftest] {p} device(s) would be pushed (dry-run)")
 
 
 def main():

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import quake_archive  # noqa: E402
+import push_fcm  # noqa: E402
 from nearme_watch import SUBS, fetch_usgs, load_json, send_email  # noqa: E402
 
 PORT = 8000
@@ -27,6 +28,7 @@ PORT = 8000
 CA_BOUNDS = (32.0, 36.4, -121.5, -114.0)
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+WATCHER = None                               # the live_watch child process (set at startup)
 
 
 def _in_ca(lat, lon):
@@ -186,6 +188,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, r) if r else self._send(404, {"error": "no California match"})
             except Exception as e:
                 self._send(502, {"error": str(e)})
+        elif path == "/api/status":
+            # the live SeedLink watcher is running -> the stream is live (it exits if the stream drops)
+            self._send(200, {"live": WATCHER is not None and WATCHER.poll() is None})
         else:
             self._send(404, {"error": "not found"})
 
@@ -195,13 +200,15 @@ class Handler(BaseHTTPRequestHandler):
         return {"date": date, "world": bucket["world"], "area": bucket["area"]}
 
     def do_POST(self):
-        if self.path != "/api/subscribe":
+        if self.path not in ("/api/subscribe", "/api/register-push"):
             return self._send(404, {"error": "not found"})
         try:
             n = int(self.headers.get("Content-Length", 0))
             sub = json.loads(self.rfile.read(n) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self._send(400, {"error": "bad JSON"})
+        if self.path == "/api/register-push":
+            return self._register_push(sub)
         if not valid(sub):
             return self._send(400, {"error": "need name, valid email, lat, lon"})
         subs = load_json(SUBS, [])
@@ -217,6 +224,18 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=send_confirmation, args=(entry,), daemon=True).start()
         self._send(200, {"ok": True, "count": len(subs)})
 
+    def _register_push(self, sub):
+        """Store a mobile device's FCM token + location so the live watcher can push alerts."""
+        try:
+            token = sub["token"]
+            lat, lon = float(sub["lat"]), float(sub["lon"])
+        except (KeyError, TypeError, ValueError):
+            return self._send(400, {"error": "need token, lat, lon"})
+        if not isinstance(token, str) or not token.strip():
+            return self._send(400, {"error": "need token, lat, lon"})
+        toks = push_fcm.save_token(token.strip(), lat, lon, str(sub.get("name", "")).strip())
+        self._send(200, {"ok": True, "count": len(toks)})
+
     def log_message(self, *a):                           # quiet default logging
         pass
 
@@ -226,9 +245,11 @@ def start_live_watcher():
     detection/magnitude nets on the live stream -- never from USGS. Runs as a child process, so a
     stream/network failure in the watcher never affects this API. USGS is used only for the
     largest-quakes display (/api/ca)."""
+    global WATCHER
     script = ROOT / "scripts" / "live_watch.py"
     try:
         proc = subprocess.Popen([sys.executable, str(script)])
+        WATCHER = proc
         print(f"live alert watcher (SeedLink + models) started, pid {proc.pid}")
         return proc
     except Exception as e:                               # a watcher that won't start shouldn't kill the API

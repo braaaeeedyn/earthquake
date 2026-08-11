@@ -40,3 +40,9 @@ Thumbs.db
 
 # Subscriber list holds personal contact info (name/email/location) — keep local, don't commit.
 data/subscribers.json
+
+# Firebase Cloud Messaging (push). The service-account key is a SECRET — never commit.
+# google-services.json is app config (not strictly secret) but kept local to be safe.
+app/android/app/google-services.json
+fcm-service-account.json
+data/processed/push_tokens.json
