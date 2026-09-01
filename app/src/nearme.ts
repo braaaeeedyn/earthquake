@@ -28,17 +28,6 @@ export interface DayTop {
   area: UsgsEvent[]
 }
 
-export async function subscribe(sub: { name: string; email: string; lat: number; lon: number }) {
-  const res = await fetch(api('/api/subscribe'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(sub),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-  return data as { ok: boolean; count: number; note?: string }
-}
-
 // Register this device's FCM token + location for push alerts (mobile app only).
 export async function registerPushToken(p: { token: string; lat: number; lon: number; name: string }) {
   const res = await fetch(api('/api/register-push'), {
@@ -49,6 +38,31 @@ export async function registerPushToken(p: { token: string; lat: number; lon: nu
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
   return data as { ok: boolean; count: number }
+}
+
+// Unregister this device's FCM token — removes it from the alert list (unsubscribe).
+export async function unregisterPushToken(p: { token: string }) {
+  const res = await fetch(api('/api/unregister-push'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+  return data as { ok: boolean; count: number }
+}
+
+// Relay a support message to the (hidden) support inbox. The user's email is used only as
+// Reply-To on the server and is never stored; the destination address is never sent to the client.
+export async function sendContact(p: { email: string; message: string }) {
+  const res = await fetch(api('/api/contact'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+  return data as { ok: boolean }
 }
 
 // Today's live top-5 (also folds the current USGS feed into the server-side daily archive).

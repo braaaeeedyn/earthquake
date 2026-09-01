@@ -50,7 +50,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
   display: flex; align-items: center; gap: var(--space-3);
   max-width: var(--maxw); width: 100%; margin: 0 auto; padding: 44px var(--space-5) 18px;
 }
-.brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+.brand { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink); text-decoration: none; }
 .live { margin-left: auto; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; color: var(--mute); text-transform: uppercase; display: flex; align-items: center; gap: var(--space-2); }
 .live .dot { width: 6px; height: 6px; border-radius: 9999px; background: var(--mute); transition: background 0.3s ease; }
 .live .dot.on { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 22%, transparent); }
@@ -153,6 +153,57 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .form-msg { font-family: var(--font-mono); font-size: 13px; margin-top: var(--space-4); }
 .form-msg.ok { color: var(--ink); }
 .form-msg.err { color: var(--ink); font-weight: 600; }
+
+/* web-only: subscription is disabled (app-only), so the button is greyed + struck through */
+.btn-struck { text-decoration: line-through; }
+.btn-struck:disabled { cursor: not-allowed; }
+.download-note { margin-top: var(--space-4); font-size: 14px; color: var(--body); }
+.download-note a { color: var(--ink); text-underline-offset: 2px; }
+
+/* --- /app subpage: download the Android APK --- */
+.app-download { padding: var(--space-6) 0 var(--space-4); }
+.app-download h1 { font-size: 34px; margin: var(--space-2) 0 var(--space-4); }
+.app-lede { color: var(--body); font-size: 15px; margin-bottom: var(--space-5); max-width: 56ch; text-wrap: pretty; }
+.app-card { display: flex; flex-direction: column; gap: var(--space-5); }
+.app-card-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.app-card-row .btn { text-decoration: none; }
+.app-file { font-family: var(--font-mono); font-size: 15px; color: var(--ink); }
+.app-file-sub { font-family: var(--font-mono); font-size: 12px; margin-top: 2px; }
+.app-steps { margin: 0; padding-left: 1.2em; color: var(--body); font-size: 14px; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-note { font-size: 12px; }
+.app-back { margin-top: var(--space-5); font-size: 14px; }
+.app-back a { color: var(--ink); text-underline-offset: 2px; }
+
+/* footer links + a button that reads as a link (used for the obfuscated support address) */
+.footer-links { margin-top: var(--space-3); }
+.footer-links a, .linklike { color: var(--mute); text-underline-offset: 2px; }
+.footer-links a:hover, .linklike:hover { color: var(--ink); }
+.linklike { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* --- /privacy legal page + 404, in the site style --- */
+.legal { padding: var(--space-6) 0 var(--space-4); }
+.legal h1 { font-size: 34px; margin: var(--space-2) 0 var(--space-2); }
+.legal h2 { font-size: 17px; margin: var(--space-6) 0 var(--space-2); }
+.legal p { color: var(--body); font-size: 15px; max-width: 62ch; text-wrap: pretty; }
+.legal strong { color: var(--ink); font-weight: 600; }
+.legal-updated { font-family: var(--font-mono); font-size: 12px; color: var(--mute); }
+.legal .linklike { color: var(--ink); }
+
+.notfound { padding: var(--space-8) 0 var(--space-6); }
+.notfound h1 { font-size: 34px; margin: var(--space-2) 0 var(--space-3); }
+
+/* multiline input for the contact form — matches .field input, but a rounder-cornered box */
+.field textarea { font-family: var(--body-font); font-size: 15px; color: var(--ink); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--card-radius); padding: 10px 16px; width: 100%; min-width: 0; resize: vertical; }
+.field textarea:focus { outline: none; border-color: var(--ink); }
+
+/* --- contact support modal --- */
+.modal-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--ink) 45%, transparent); display: flex; align-items: center; justify-content: center; padding: var(--space-5); z-index: 50; }
+.modal { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--card-radius); padding: var(--space-5); width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px color-mix(in srgb, var(--ink) 18%, transparent); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-2); }
+.modal-head h2 { font-size: 22px; }
+.modal-x { font-family: var(--body-font); font-size: 22px; line-height: 1; color: var(--mute); background: none; border: 0; padding: 4px; cursor: pointer; }
+.modal-x:hover { color: var(--ink); }
+.modal-lede { color: var(--body); font-size: 14px; margin-bottom: var(--space-4); text-wrap: pretty; }
 
 /* --- largest earthquakes, browsable by day (world + California) --- */
 .largest { padding: var(--space-8) 0 var(--space-2); border-top: 1px solid var(--hairline); }

@@ -24,6 +24,8 @@ app/.vite/
 # Capacitor / Android (added later)
 app/android/
 app/ios/
+# built APK served by the /app page — a build artifact, not source
+app/public/*.apk
 
 # OS / editor
 .DS_Store

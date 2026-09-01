@@ -7,7 +7,8 @@ Architecture:
     -> COINCIDENCE: an event is declared only when >= K stations trigger within a short window
        (this is what kills single-station false alarms)
     -> location proxy (strongest-triggering station) + MAGNITUDE model sizes the event
-    -> subscribers whose estimated shaking clears a threshold get emailed detection + size + shaking
+    -> registered devices whose estimated shaking clears a threshold get a push notification
+       (detection + size + shaking); alerts are push-only
 
 Honesty:
   - USGS is bypassed: the detector genuinely fires on the raw stream. But SeedLink latency is
@@ -36,7 +37,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
 import shaking_model  # noqa: E402
-from nearme_watch import SUBS, haversine_km, load_json, send_email  # noqa: E402
+from nearme_watch import haversine_km  # noqa: E402
 
 DETECTOR = ROOT / "data" / "processed" / "detector.pt"
 MAG_CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
@@ -53,7 +54,7 @@ DET_THRESH = 0.60                 # per-station detection probability to count a
 MIN_STATIONS = 4                  # COINCIDENCE: stations that must agree to declare an event
 COINC_WIN = 12.0                  # seconds within which triggers count toward the same event
 COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event
-ALERT_MMI = 3.0                   # alert a subscriber when estimated shaking (MMI) >= this
+# The alert decision (per subscriber) is the 2-of-3 shaking vote in shaking_model.alert_level.
 
 
 # ---------------------------------------------------------------- network + models
@@ -135,46 +136,30 @@ def declare_from_triggers(triggers, now, min_stations):
     return sorted(by_sta), strongest
 
 
-def alert_subscribers(subs, epi_lat, epi_lon, mag, det_conf, nstations, dry_run):
-    """Email every subscriber whose estimated shaking reaches the threshold. Returns count sent."""
-    sent = 0
-    for s in subs:
-        dist = haversine_km(epi_lat, epi_lon, s["lat"], s["lon"])
-        mmi = shaking_model.estimate_mmi(mag, dist) if mag is not None else 0.0
-        if mag is not None and mmi < ALERT_MMI:
-            continue
-        if mag is None:
-            continue                                  # no size -> no shaking-based decision
-        label, desc = shaking_model.describe(mmi)
-        subject = f"Live quake detected: M{mag:.1f} — {label.lower()} shaking expected"
-        body = (f"Hi {s['name']},\n\n"
-                f"Our model just detected an earthquake on the live Southern-California seismic "
-                f"stream (detection confidence {det_conf:.0%}), about {dist:.0f} km from you.\n\n"
-                f"Detection: confirmed by the model on {nstations} stations.\n"
-                f"Size: estimated magnitude {mag:.1f}.\n"
-                f"Estimated shaking where you are: {label} — intensity {round(mmi)} of 10 ({desc}).\n\n"
-                f"(Research prototype - rapid detection, not an official warning. Location is a "
-                f"station-based estimate; shaking is a model estimate.)")
-        send_email(s["email"], subject, body, dry_run)
-        sent += 1
-    return sent
-
-
 def alert_push_devices(tokens, epi_lat, epi_lon, mag, det_conf, nstations, dry_run):
-    """Push every mobile device whose estimated shaking reaches the threshold. Mirrors
-    alert_subscribers (same shaking gate) but sends a short FCM notification. Returns count sent."""
+    """Push each device per the 2-of-3 shaking vote (shaking_model.alert_level):
+      1 criterion  -> POTENTIAL earthquake warning (tentative, one indicator)
+      2-3 criteria -> EARTHQUAKE WARNING (corroborated)
+    A short FCM notification with detection + size + shaking. Returns count sent."""
     sent = 0
     for t in tokens:
         if mag is None:
             continue                                  # no size -> no shaking-based decision
         dist = haversine_km(epi_lat, epi_lon, t["lat"], t["lon"])
-        mmi = shaking_model.estimate_mmi(mag, dist)
-        if mmi < ALERT_MMI:
+        level = shaking_model.alert_level(mag, dist)
+        if level == shaking_model.LEVEL_NONE:
             continue
+        mmi = shaking_model.estimate_mmi(mag, dist)
         label, _ = shaking_model.describe(mmi)
-        title = f"M{mag:.1f} quake detected — {label.lower()} shaking"
-        body = (f"~{dist:.0f} km away. Estimated intensity {round(mmi)}/10. "
-                f"Detected on {nstations} stations. Research prototype, not an official warning.")
+        if level == shaking_model.LEVEL_WARNING:
+            title = f"Earthquake warning: M{mag:.1f} — {label.lower()} shaking"
+            body = (f"Detected ~{dist:.0f} km away on {nstations} stations. "
+                    f"Estimated intensity {round(mmi)}/10. Research prototype, not an official warning.")
+        else:                                         # LEVEL_POTENTIAL
+            title = f"Potential earthquake nearby: M{mag:.1f}"
+            body = (f"A possible quake ~{dist:.0f} km away (one of three shaking checks). "
+                    f"Estimated intensity {round(mmi)}/10. Unconfirmed — research prototype, "
+                    f"not an official warning.")
         if push_fcm.send_push(t["token"], title, body, dry_run):
             sent += 1
     return sent
@@ -204,7 +189,6 @@ def run_live(args):
     lock = threading.Lock()
     triggers = deque(maxlen=200)
     last_alert = [0.0]
-    subs = load_json(SUBS, [])
 
     def scan():
         while True:
@@ -231,13 +215,12 @@ def run_live(args):
                 conf = max(p for t, si, p in triggers if now - t <= COINC_WIN)
                 mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
                     if mag_models else None
-                nsent = alert_subscribers(subs, epi_lat, epi_lon, mag, conf, len(stas), args.dry_run)
                 # reload device tokens each event so mobile users who just signed up are covered
                 psent = alert_push_devices(push_fcm.load_tokens(), epi_lat, epi_lon, mag, conf,
                                            len(stas), args.dry_run)
                 msize = f"M{mag:.1f}" if mag is not None else "size n/a"
                 print(f"[EVENT] {len(stas)} stations, near {names[strongest]} "
-                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {nsent} email + {psent} push alerted")
+                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {psent} push alerted")
 
     class Client_(EasySeedLinkClient):
         def on_data(self, trace):
@@ -308,26 +291,19 @@ def replay(args):
 
 
 def selftest(args):
-    """Deterministic pipeline check: fake >=K coincident triggers -> declare -> alert (dry-run)."""
-    subs = load_json(SUBS, [])
-    if not subs:
-        print(f"No subscribers in {SUBS.relative_to(ROOT)}.")
-        return
+    """Deterministic pipeline check: fake >=K coincident triggers -> declare -> push alert (dry-run)."""
     stations, coords = load_network()
     now = time.time()
     trig = deque((now, i, 0.9) for i in range(args.min_stations))   # K stations agree
     decl = declare_from_triggers(trig, now, args.min_stations)
     assert decl, "coincidence should declare with K triggers"
     _, strongest = decl
-    s0 = subs[0]
-    epi_lat, epi_lon = s0["lat"] + 0.2, s0["lon"]              # a quake ~22 km from subscriber[0]
+    dev_lat, dev_lon = coords[strongest]                      # a device right at the epicenter proxy
+    epi_lat, epi_lon = dev_lat + 0.2, dev_lon                 # a quake ~22 km from that device
     mag = 5.2
     print(f"[selftest] declared event near {stations[strongest]}, placed M{mag} "
-          f"~{haversine_km(epi_lat, epi_lon, s0['lat'], s0['lon']):.0f} km from {s0['name']}")
-    n = alert_subscribers(subs, epi_lat, epi_lon, mag, 0.95, args.min_stations, dry_run=True)
-    print(f"[selftest] {n} subscriber(s) would be emailed (dry-run)")
-    # exercise the push path too: a fabricated device co-located with subscriber[0]
-    fake = [{"token": "selftest-token", "lat": s0["lat"], "lon": s0["lon"], "name": s0["name"]}]
+          f"~{haversine_km(epi_lat, epi_lon, dev_lat, dev_lon):.0f} km from the test device")
+    fake = [{"token": "selftest-token", "lat": dev_lat, "lon": dev_lon, "name": "selftest"}]
     p = alert_push_devices(fake, epi_lat, epi_lon, mag, 0.95, args.min_stations, dry_run=True)
     print(f"[selftest] {p} device(s) would be pushed (dry-run)")
 
@@ -338,7 +314,7 @@ def main():
     ap.add_argument("--min-stations", type=int, default=MIN_STATIONS, dest="min_stations")
     ap.add_argument("--det-thresh", type=float, default=DET_THRESH, dest="det_thresh")
     ap.add_argument("--scan", type=float, default=2.0, help="seconds between detection scans")
-    ap.add_argument("--dry-run", action="store_true", help="print instead of emailing")
+    ap.add_argument("--dry-run", action="store_true", help="print instead of pushing")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--replay", action="store_true")
     args = ap.parse_args()

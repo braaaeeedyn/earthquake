@@ -1,0 +1,22 @@
+[Unit]
+# SeismicSoCal backend (server.py). It auto-spawns AND auto-respawns the live SeedLink alert
+# daemon (live_watch.py), so this one unit runs the whole thing. systemd restarts it if it dies.
+Description=SeismicSoCal backend + live alert daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/seismicsocal
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
+# SMTP creds for the contact form (SMTP_USER=..., SMTP_PASS=...). Optional; contact form is
+# the only thing that uses them. Remove this line if you have no .env.
+EnvironmentFile=-/opt/seismicsocal/.env
+ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

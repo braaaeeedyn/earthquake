@@ -1,0 +1,25 @@
+# SeismicSoCal — Caddy reverse proxy + static site, with automatic HTTPS (Let's Encrypt).
+# Replace the hostname below with YOUR domain (or DuckDNS subdomain). It must already resolve
+# to this server's public IP before Caddy can get a certificate.
+#
+# Put this at /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+
+seismicsocal.duckdns.org {
+	encode gzip
+
+	# Serve the built web app (Vite output). The APK the /app page links to lives here too
+	# (app/public/seismicsocal.apk -> dist/seismicsocal.apk after `npm run build`).
+	root * /opt/seismicsocal/app/dist
+
+	# API -> the local Python backend (server.py listens on 127.0.0.1:8000).
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Everything else is the single-page app: serve the file if it exists, otherwise index.html
+	# so client routes (/app, /privacy, and the custom 404) work on a hard refresh.
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

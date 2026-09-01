@@ -1,18 +1,22 @@
-"""Minimal stdlib backend for the near-me feature: subscribe endpoint + live USGS events.
+"""Minimal stdlib backend for the near-me feature: push register/unregister + live USGS events.
 
 No framework (Flask/FastAPI not installed). The Vite dev server proxies /api/* here, so the
-React app calls /api/subscribe and /api/events with no CORS fuss. All work is server-side;
-the browser only sends {name, email, lat, lon}. Run alongside the app:
+app calls /api/register-push, /api/unregister-push and /api/events with no CORS fuss. Alerts
+are push-only (app-only product); a device sends {token, lat, lon, name} and receives FCM
+pushes from the live watcher. Run alongside the app:
 
   python scripts/server.py            # http://localhost:8000
   cd app && npm run dev               # http://localhost:5173  (proxies /api -> :8000)
 """
 import json
+import os
+import smtplib
 import subprocess
 import sys
 import threading
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -21,9 +25,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import quake_archive  # noqa: E402
 import push_fcm  # noqa: E402
-from nearme_watch import SUBS, fetch_usgs, load_json, send_email  # noqa: E402
+from nearme_watch import fetch_usgs  # noqa: E402  (its import also loads .env into os.environ)
 
-PORT = 8000
+PORT = int(os.environ.get("PORT", "8000"))
+# Bind address. Default 127.0.0.1 (safe: reach it through a reverse proxy that terminates TLS).
+# Set HOST=0.0.0.0 to expose it directly (only behind a firewall/proxy — it speaks plain HTTP).
+HOST = os.environ.get("HOST", "127.0.0.1")
+# Support inbox for the contact form. SERVER-SIDE ONLY: never sent to the client, so the site
+# never reveals the address. Contact messages are relayed here and nothing is persisted.
+SUPPORT_TO = "braedynthompson@berkeley.edu"
 # Southern California only (the trained network's region): lat_min, lat_max, lon_min, lon_max
 CA_BOUNDS = (32.0, 36.4, -121.5, -114.0)
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
@@ -89,30 +99,6 @@ def ca_top(window):
     return {"window": window, "label": label, "events": events}
 
 
-def send_confirmation(entry):
-    """Email a new subscriber to confirm they're signed up for alerts at their location.
-
-    Runs best-effort in a background thread so a slow/failed SMTP call never blocks or
-    breaks the /api/subscribe response. Falls back to a console print when SMTP isn't
-    configured (same behaviour as the watcher's send_email)."""
-    subject = "You're subscribed to earthquake alerts"
-    body = (
-        f"Hi {entry['name']},\n\n"
-        f"You're now signed up for earthquake alerts at your location "
-        f"(lat {entry['lat']:.4f}, lon {entry['lon']:.4f}).\n\n"
-        f"Our models watch the live Southern California seismic stream. When they detect a "
-        f"quake and expect at least felt-level shaking where you are, we'll email you the "
-        f"detection, its estimated size, and how hard it's likely to shake.\n\n"
-        f"No action is needed. You'll only hear from us when a nearby quake happens.\n\n"
-        f"(Research prototype, not an official warning. Rapid detection from live seismic "
-        f"data, not sub-second pre-arrival warning.)"
-    )
-    try:
-        send_email(entry["email"], subject, body, dry_run=False)
-    except Exception as e:                               # SMTP hiccup shouldn't affect the user
-        print(f"    confirmation email failed -> {entry['email']}: {e!r}")
-
-
 def geocode(q):
     """Look up {lat, lon, name} for a California place via Nominatim, restricted to the CA box."""
     params = {"q": q, "format": "json", "limit": 1, "countrycodes": "us",
@@ -130,13 +116,27 @@ def geocode(q):
     return {"lat": lat, "lon": lon, "name": top.get("display_name", q)}
 
 
-def valid(sub):
-    try:
-        return (isinstance(sub.get("name"), str) and sub["name"].strip()
-                and "@" in sub.get("email", "")
-                and -90 <= float(sub["lat"]) <= 90 and -180 <= float(sub["lon"]) <= 180)
-    except (KeyError, TypeError, ValueError):
-        return False
+def send_support_email(from_email, message):
+    """Relay a support message to the hidden SUPPORT_TO inbox, with the sender's address as
+    Reply-To so support can respond. Nothing is persisted: the sender's email lives only in
+    this in-memory call and the outgoing message's Reply-To, never on disk. When SMTP isn't
+    configured we no-op (and don't log the address) so the feature degrades quietly."""
+    if not os.environ.get("SMTP_USER"):
+        print("    [contact] SMTP not configured — message not sent (nothing stored)")
+        return False                                     # caller reports an honest failure
+    msg = EmailMessage()
+    msg["From"] = os.environ["SMTP_USER"]
+    msg["To"] = SUPPORT_TO
+    msg["Reply-To"] = from_email
+    msg["Subject"] = f"SeismicSoCal support — {from_email}"
+    msg.set_content(f"From: {from_email}\n\n{message}")
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    with smtplib.SMTP(host, port, timeout=30) as srv:
+        srv.starttls()
+        srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+        srv.send_message(msg)
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -146,6 +146,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # security headers: this is a JSON-only API, so lock down sniffing/embedding/referrers
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -200,7 +204,10 @@ class Handler(BaseHTTPRequestHandler):
         return {"date": date, "world": bucket["world"], "area": bucket["area"]}
 
     def do_POST(self):
-        if self.path not in ("/api/subscribe", "/api/register-push"):
+        # Alerts are push-only (the app-only product): a device subscribes by registering its
+        # FCM token + location, and unsubscribes by removing it. /api/contact relays a support
+        # message to the hidden inbox. There is no email-based alert channel.
+        if self.path not in ("/api/register-push", "/api/unregister-push", "/api/contact"):
             return self._send(404, {"error": "not found"})
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -209,20 +216,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "bad JSON"})
         if self.path == "/api/register-push":
             return self._register_push(sub)
-        if not valid(sub):
-            return self._send(400, {"error": "need name, valid email, lat, lon"})
-        subs = load_json(SUBS, [])
-        entry = {"name": sub["name"].strip(), "email": sub["email"].strip(),
-                 "lat": float(sub["lat"]), "lon": float(sub["lon"])}
-        # de-dupe by (email, rounded location)
-        key = (entry["email"], round(entry["lat"], 2), round(entry["lon"], 2))
-        if any((s["email"], round(s["lat"], 2), round(s["lon"], 2)) == key for s in subs):
-            return self._send(200, {"ok": True, "note": "already subscribed", "count": len(subs)})
-        subs.append(entry)
-        SUBS.write_text(json.dumps(subs, indent=2))
-        # confirm the signup by email, off the request thread so SMTP latency never blocks
-        threading.Thread(target=send_confirmation, args=(entry,), daemon=True).start()
-        self._send(200, {"ok": True, "count": len(subs)})
+        if self.path == "/api/contact":
+            return self._contact(sub)
+        return self._unregister_push(sub)
 
     def _register_push(self, sub):
         """Store a mobile device's FCM token + location so the live watcher can push alerts."""
@@ -236,8 +232,36 @@ class Handler(BaseHTTPRequestHandler):
         toks = push_fcm.save_token(token.strip(), lat, lon, str(sub.get("name", "")).strip())
         self._send(200, {"ok": True, "count": len(toks)})
 
+    def _unregister_push(self, sub):
+        """Remove a device's FCM token (unsubscribe). Idempotent: unknown token -> still ok."""
+        token = sub.get("token")
+        if not isinstance(token, str) or not token.strip():
+            return self._send(400, {"error": "need token"})
+        toks = push_fcm.remove_token(token.strip())
+        self._send(200, {"ok": True, "count": len(toks)})
+
+    def _contact(self, sub):
+        """Relay a support message to the hidden inbox. The sender supplies their own email (used
+        only as Reply-To) and a message; neither is stored. The support address is never returned."""
+        email = str(sub.get("email", "")).strip()
+        message = str(sub.get("message", "")).strip()
+        if "@" not in email or "." not in email or len(email) > 254:
+            return self._send(400, {"error": "enter a valid email"})
+        if not (1 <= len(message) <= 5000):
+            return self._send(400, {"error": "enter a message (max 5000 characters)"})
+        try:
+            sent = send_support_email(email, message)
+        except Exception as e:                               # SMTP hiccup -> report, don't crash
+            return self._send(502, {"error": f"could not send: {e}"})
+        if not sent:                                         # creds missing -> don't claim success
+            return self._send(503, {"error": "support is unavailable right now — please try again later"})
+        self._send(200, {"ok": True})
+
     def log_message(self, *a):                           # quiet default logging
         pass
+
+
+WATCHER_STOP = threading.Event()                         # set on shutdown to stop respawning
 
 
 def start_live_watcher():
@@ -247,22 +271,45 @@ def start_live_watcher():
     largest-quakes display (/api/ca)."""
     global WATCHER
     script = ROOT / "scripts" / "live_watch.py"
-    try:
-        proc = subprocess.Popen([sys.executable, str(script)])
-        WATCHER = proc
-        print(f"live alert watcher (SeedLink + models) started, pid {proc.pid}")
-        return proc
-    except Exception as e:                               # a watcher that won't start shouldn't kill the API
-        print(f"could not start live_watch.py ({e!r}); API runs, but no live alerts")
-        return None
+    proc = subprocess.Popen([sys.executable, str(script)])
+    WATCHER = proc
+    print(f"live alert watcher (SeedLink + models) started, pid {proc.pid}")
+    return proc
+
+
+def supervise_watcher(poll=10):
+    """Keep the daemon up 24/7. The live watcher exits if its SeedLink stream drops; this thread
+    notices and respawns it (short backoff so a persistent failure doesn't become a tight loop),
+    so alerting resumes on its own without a human. The API keeps serving throughout."""
+    delay = 5
+    while not WATCHER_STOP.is_set():
+        if WATCHER is None or WATCHER.poll() is not None:
+            code = getattr(WATCHER, "returncode", None)
+            print(f"live watcher not running (exit {code}); restarting in {delay}s")
+            if WATCHER_STOP.wait(delay):
+                break
+            try:
+                start_live_watcher()
+                delay = 5                                # reset backoff after a clean (re)start
+            except Exception as e:                       # a watcher that won't start shouldn't kill the API
+                print(f"restart failed ({e!r}); backing off")
+                delay = min(delay * 2, 120)
+                continue
+        if WATCHER_STOP.wait(poll):
+            break
 
 
 if __name__ == "__main__":
-    watcher = start_live_watcher()
-    print(f"near-me backend on http://localhost:{PORT}  (POST /api/subscribe, GET /api/events)")
-    server = ThreadingHTTPServer(("localhost", PORT), Handler)
+    try:
+        start_live_watcher()
+    except Exception as e:
+        print(f"could not start live_watch.py ({e!r}); API runs, supervisor will retry")
+    threading.Thread(target=supervise_watcher, daemon=True).start()
+    print(f"near-me backend on http://{HOST}:{PORT}  (POST /api/register-push, GET /api/events)")
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     try:
         server.serve_forever()
     finally:
-        if watcher and watcher.poll() is None:          # take the watcher down with the API
-            watcher.terminate()
+        WATCHER_STOP.set()                              # stop the supervisor from respawning
+        if WATCHER and WATCHER.poll() is None:          # take the watcher down with the API
+            WATCHER.terminate()

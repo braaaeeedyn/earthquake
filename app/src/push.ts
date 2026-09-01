@@ -1,12 +1,25 @@
-// Mobile push registration (Capacitor + FCM). No-op on web — the browser build has no native
-// push, so enablePush() returns null there and the email path is the only alert channel.
+// Mobile push registration (Capacitor + FCM). Push is the only alert channel — there is no
+// email path. No-op on web: the browser build has no native push, so enablePush() returns null
+// there and alerts are only available in the installed app.
 
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
-import { registerPushToken } from './nearme'
+import { registerPushToken, unregisterPushToken } from './nearme'
+
+const SUBSCRIBED_KEY = 'seismic.push.subscribed'
+const TOKEN_KEY = 'seismic.push.token'
 
 export function isNativeApp() {
   return Capacitor.isNativePlatform()
+}
+
+// Whether this device is currently registered for push alerts (persisted locally).
+export function isSubscribed(): boolean {
+  try {
+    return localStorage.getItem(SUBSCRIBED_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 // One-shot: register with FCM and resolve the device token (rejects on registrationError).
@@ -35,7 +48,32 @@ export async function enablePush(loc: { name: string; lat: number; lon: number }
 
   const token = await awaitToken()
   await registerPushToken({ token, lat: loc.lat, lon: loc.lon, name: loc.name })
+  try {
+    localStorage.setItem(SUBSCRIBED_KEY, '1')
+    localStorage.setItem(TOKEN_KEY, token)
+  } catch {
+    // storage unavailable — state just won't persist across restarts
+  }
   return 'Push alerts enabled on this device.'
+}
+
+// Unsubscribe this device: remove its token server-side and clear the local subscribed state.
+export async function disablePush(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return
+  let token = ''
+  try {
+    token = localStorage.getItem(TOKEN_KEY) ?? ''
+  } catch {
+    token = ''
+  }
+  if (!token) token = await awaitToken()   // token is stable per install; re-fetch if not stored
+  await unregisterPushToken({ token })
+  try {
+    localStorage.removeItem(SUBSCRIBED_KEY)
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    // ignore
+  }
 }
 
 // Foreground handlers so a notification that arrives while the app is open isn't silently

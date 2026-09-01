@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
-import { subscribe, caTop, geocode, liveStatus, type UsgsEvent, type CaWindow } from './nearme'
-import { enablePush, initPush, isNativeApp } from './push'
+import { caTop, geocode, liveStatus, sendContact, type UsgsEvent, type CaWindow } from './nearme'
+import { enablePush, disablePush, initPush, isNativeApp, isSubscribed } from './push'
 
 type State =
   | { status: 'loading' }
@@ -27,9 +27,33 @@ const ROWS = [
   },
 ]
 
+// Tiny pathname router: push a new path and re-render (no router dependency for a handful of pages).
+function navigate(path: string) {
+  window.history.pushState({}, '', path)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
+
+type Route = 'home' | 'app' | 'privacy' | 'notfound'
+const ROUTE_OF = (p: string): Route =>
+  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : 'notfound'
+const PAGE_TITLES: Record<Route, string> = {
+  home: 'SeismicSoCal · Southern California earthquake ML',
+  app: 'Get the app · SeismicSoCal',
+  privacy: 'Privacy policy · SeismicSoCal',
+  notfound: 'Page not found · SeismicSoCal',
+}
+
+// Opens the in-app contact form. The support address lives only on the server, so it's never
+// shown here; any "Contact support" control just fires this event and App renders the modal.
+function contactSupport() {
+  window.dispatchEvent(new CustomEvent('open-contact'))
+}
+
 export default function App() {
   const [state, setState] = useState<State>({ status: 'loading' })
   const [live, setLive] = useState(false)
+  const [path, setPath] = useState(() => window.location.pathname)
+  const [contactOpen, setContactOpen] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -40,37 +64,253 @@ export default function App() {
     const checkLive = () => liveStatus().then((v) => active && setLive(v))
     checkLive()
     const id = setInterval(checkLive, 15000)   // poll the SeedLink watcher status
+    const onPop = () => setPath(window.location.pathname)
+    const onContact = () => setContactOpen(true)
+    window.addEventListener('popstate', onPop)
+    window.addEventListener('open-contact', onContact)
     return () => {
       active = false
       clearInterval(id)
+      window.removeEventListener('popstate', onPop)
+      window.removeEventListener('open-contact', onContact)
     }
   }, [])
+
+  const route = ROUTE_OF(path)
+  useEffect(() => { document.title = PAGE_TITLES[route] }, [route])
 
   return (
     <div className="app">
       <nav className="nav">
-        <span className="brand">SeismicSoCal</span>
+        <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>SeismicSoCal</a>
         <span className="live">
           <span className={`dot ${live ? 'on' : ''}`} aria-hidden /> {live ? 'live · SeedLink' : 'offline · SeedLink'}
         </span>
       </nav>
 
       <main className="content">
-        {state.status === 'loading' && <p className="state">Loading…</p>}
-        {state.status === 'error' && (
-          <div className="state">
-            <h2>Couldn’t load results</h2>
-            <p className="muted">{state.message}</p>
-            <p className="muted">Ensure <code>seismic.json</code> is in <code>public/</code>.</p>
-          </div>
+        {route === 'app' && <AppDownload />}
+        {route === 'privacy' && <Privacy />}
+        {route === 'notfound' && <NotFound />}
+        {route === 'home' && (
+          <>
+            {state.status === 'loading' && <p className="state">Loading…</p>}
+            {state.status === 'error' && (
+              <div className="state">
+                <h2>Couldn’t load results</h2>
+                <p className="muted">{state.message}</p>
+                <p className="muted">Ensure <code>seismic.json</code> is in <code>public/</code>.</p>
+              </div>
+            )}
+            {state.status === 'ready' && <Console data={state.data} />}
+          </>
         )}
-        {state.status === 'ready' && <Console data={state.data} />}
       </main>
 
       <footer className="footer">
-        Research &amp; education · real Southern California network data · not an official warning system
+        <p>Research &amp; education · real Southern California network data · not an official warning system</p>
+        <p className="footer-links">
+          <a href="/privacy" onClick={(e) => { e.preventDefault(); navigate('/privacy') }}>Privacy</a>
+          <span aria-hidden> · </span>
+          <button type="button" className="linklike" onClick={contactSupport}>Contact support</button>
+        </p>
       </footer>
+
+      {contactOpen && <ContactModal onClose={() => setContactOpen(false)} />}
     </div>
+  )
+}
+
+// In-app support form: the user enters their own email + a message; the server relays it to the
+// hidden support inbox with their email as Reply-To. Nothing is stored, and the address is never
+// exposed to the client.
+function ContactModal({ onClose }: { onClose: () => void }) {
+  const [email, setEmail] = useState('')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setMsg(null)
+    try {
+      await sendContact({ email, message })
+      setMsg({ kind: 'ok', text: 'Message sent. We’ll reply to the email you entered.' })
+      setEmail('')
+      setMessage('')
+    } catch (err) {
+      setMsg({ kind: 'err', text: `Couldn’t send: ${(err as Error).message}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-title" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2 id="contact-title">Contact support</h2>
+          <button type="button" className="modal-x" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <p className="modal-lede">
+          Send us a message. Enter your email so we can reply — it’s used only for the reply and is
+          not stored.
+        </p>
+        <form onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="ct-email">Your email</label>
+            <input id="ct-email" type="email" required value={email}
+              onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          </div>
+          <div className="field">
+            <label htmlFor="ct-msg">Message</label>
+            <textarea id="ct-msg" required rows={5} maxLength={5000} value={message}
+              onChange={(e) => setMessage(e.target.value)} placeholder="How can we help?" />
+          </div>
+          <div className="actions">
+            <button type="submit" className="btn" disabled={busy}>{busy ? 'Sending…' : 'Send message'}</button>
+            <button type="button" className="btn-outline" onClick={onClose}>Cancel</button>
+          </div>
+          {msg && <p className={`form-msg ${msg.kind}`}>{msg.text}</p>}
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Custom 404 in the site's own style.
+function NotFound() {
+  return (
+    <section className="notfound">
+      <p className="eyebrow">404</p>
+      <h1>Page not found</h1>
+      <p className="app-lede">That page doesn’t exist. It may have moved, or the link was mistyped.</p>
+      <p className="app-back">
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+      </p>
+    </section>
+  )
+}
+
+// Privacy policy. Honest about what the app collects, that ML is used, and the third parties involved.
+function Privacy() {
+  return (
+    <section className="legal">
+      <p className="eyebrow">Legal</p>
+      <h1>Privacy policy</h1>
+      <p className="legal-updated">SeismicSoCal — research prototype. Last updated August 2026.</p>
+
+      <h2>What we collect</h2>
+      <p>
+        SeismicSoCal collects data <strong>only if you subscribe to alerts inside the app</strong>.
+        When you subscribe we store: the name you enter, the approximate location (latitude and
+        longitude) you choose, and your device’s push-notification token. The public website
+        collects no personal data and has no subscribe function — alerts exist only in the app.
+      </p>
+
+      <h2>How we use it</h2>
+      <p>
+        Your location is used solely to decide whether a detected earthquake is close enough to
+        notify you, and your device token is used solely to deliver that push notification. We do
+        not sell your data, use it for advertising, or share it except with the notification
+        provider described below.
+      </p>
+
+      <h2>Use of AI / machine learning</h2>
+      <p>
+        SeismicSoCal uses machine-learning models to detect earthquakes on a live seismic stream,
+        estimate their magnitude, and estimate expected shaking. These models generate the content
+        of the alerts you receive. They run on our server against public seismic-network data — your
+        personal data is never used to train them, and the alert decision is an automated estimate,
+        not an official warning.
+      </p>
+
+      <h2>Third parties</h2>
+      <p>
+        Push notifications are delivered through <strong>Google Firebase Cloud Messaging (FCM)</strong>.
+        To route a notification to your device, your push token is shared with Google as the message
+        recipient; Google’s handling is governed by its own privacy policy. We also query public data
+        services that receive no personal information beyond a normal web request — the USGS /
+        EarthScope earthquake catalog, and OpenStreetMap’s Nominatim for the place name you type when
+        searching for your location.
+      </p>
+
+      <h2>Unsubscribing and deletion</h2>
+      <p>
+        You can unsubscribe at any time with the <strong>Unsubscribe</strong> button in the app, which
+        removes your device token and location from our records. If you <strong>uninstall the app</strong>,
+        your device is unsubscribed automatically: the push token is invalidated and we purge it the
+        next time an alert would have been sent.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions about your data? <button type="button" className="linklike" onClick={contactSupport}>Contact support</button>.
+        The contact form uses the email you enter only to reply to you — it is not stored.
+      </p>
+
+      <p className="app-back">
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+      </p>
+    </section>
+  )
+}
+
+// The /app subpage: download the Android app (APK) that unlocks subscription + push alerts.
+function AppDownload() {
+  // Read the real APK size from the file itself so the page can't advertise a stale number.
+  const [sizeMB, setSizeMB] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    fetch('/seismicsocal.apk', { method: 'HEAD' })
+      .then((r) => {
+        const len = r.headers.get('content-length')
+        if (active && len) setSizeMB((Number(len) / 1048576).toFixed(1))
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  return (
+    <section className="app-download">
+      <p className="eyebrow">Get the app</p>
+      <h1>SeismicSoCal for Android</h1>
+      <p className="app-lede">
+        Alerts run only in the app: install it to subscribe your location and receive push
+        notifications when the live models detect a nearby earthquake. This is a research
+        prototype, not an official warning system.
+      </p>
+
+      <div className="card app-card">
+        <div className="app-card-row">
+          <div>
+            <p className="app-file">seismicsocal.apk</p>
+            <p className="muted app-file-sub">Android{sizeMB ? ` · ${sizeMB} MB` : ''} · debug build</p>
+          </div>
+          <a className="btn" href="/seismicsocal.apk" download="seismicsocal.apk">Download APK</a>
+        </div>
+        <ol className="app-steps">
+          <li>Download the APK on your Android device.</li>
+          <li>Open it — Android will ask to allow installs from this source. Enable it for your browser.</li>
+          <li>Install, open SeismicSoCal, set your location, and tap Subscribe to turn on alerts.</li>
+        </ol>
+        <p className="muted app-note">
+          Android only. iOS is not available. The APK is an unsigned debug build for demonstration;
+          your device may warn about installing outside the Play Store.
+        </p>
+      </div>
+
+      <p className="app-back">
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+      </p>
+    </section>
   )
 }
 
@@ -496,9 +736,10 @@ function CaLargest() {
 }
 
 function NearMe() {
-  const [form, setForm] = useState({ name: '', email: '', lat: '', lon: '' })
+  const [form, setForm] = useState({ name: '', lat: '', lon: '' })
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [subscribed, setSubscribed] = useState(isSubscribed())
   const [city, setCity] = useState('')
   const [stateName, setStateName] = useState('CA')
   const [searching, setSearching] = useState(false)
@@ -533,18 +774,30 @@ function NearMe() {
     setBusy(true)
     setMsg(null)
     try {
-      const r = await subscribe({ name: form.name, email: form.email, lat: Number(form.lat), lon: Number(form.lon) })
-      let text = r.note ?? `Subscribed — you’re #${r.count} on the watch list.`
-      // On the mobile app, also register this device for push alerts.
-      try {
-        const pushed = await enablePush({ name: form.name, lat: Number(form.lat), lon: Number(form.lon) })
-        if (pushed) text += ' Push alerts enabled on this device.'
-      } catch (pErr) {
-        text += ` (Email set; push couldn’t be enabled: ${(pErr as Error).message}.)`
+      const pushed = await enablePush({ name: form.name, lat: Number(form.lat), lon: Number(form.lon) })
+      if (pushed === null) {
+        // web build: no native push, so there's nothing to subscribe to here
+        setMsg({ kind: 'err', text: 'Alerts arrive as push notifications — install the SeismicSoCal app to subscribe.' })
+        return
       }
-      setMsg({ kind: 'ok', text })
+      setSubscribed(true)
+      setMsg({ kind: 'ok', text: 'Subscribed — push alerts are enabled on this device.' })
     } catch (err) {
-      setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}. Is the backend running?` })
+      setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}.` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unsubscribe = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await disablePush()
+      setSubscribed(false)
+      setMsg({ kind: 'ok', text: 'Unsubscribed — this device will no longer receive alerts.' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: `Couldn’t unsubscribe: ${(err as Error).message}.` })
     } finally {
       setBusy(false)
     }
@@ -556,9 +809,9 @@ function NearMe() {
       <h2>Alert me near me</h2>
       <p className="nearme-lede">
         A model watches the live Southern California seismic stream and, when it detects a quake
-        near you, emails you the detection, its size, and how hard it is likely to shake. This is
-        rapid detection, not an official warning.
-        {isNativeApp() && ' On this app, alerts also arrive as push notifications.'}
+        near you, sends a push notification with the detection, its size, and how hard it is likely
+        to shake. This is rapid detection, not an official warning.
+        {!isNativeApp() && ' Alerts are available in the SeismicSoCal app.'}
       </p>
 
       <div className="card">
@@ -566,10 +819,6 @@ function NearMe() {
           <div className="field">
             <label htmlFor="nm-name">Name</label>
             <input id="nm-name" value={form.name} onChange={set('name')} required placeholder="Your name" />
-          </div>
-          <div className="field">
-            <label htmlFor="nm-email">Email</label>
-            <input id="nm-email" type="email" value={form.email} onChange={set('email')} required placeholder="you@example.com" />
           </div>
           <div className="field">
             <label htmlFor="nm-city">Search location</label>
@@ -617,13 +866,32 @@ function NearMe() {
             </div>
           </div>
           <div className="actions">
-            <button type="submit" className="btn" disabled={busy}>
-              {busy ? 'Subscribing…' : 'Subscribe'}
-            </button>
+            {isNativeApp() ? (
+              subscribed ? (
+                <button type="button" className="btn" onClick={unsubscribe} disabled={busy}>
+                  {busy ? 'Unsubscribing…' : 'Unsubscribe'}
+                </button>
+              ) : (
+                <button type="submit" className="btn" disabled={busy}>
+                  {busy ? 'Subscribing…' : 'Subscribe'}
+                </button>
+              )
+            ) : (
+              // Web has no push channel — subscription lives in the app only.
+              <button type="button" className="btn btn-struck" disabled aria-disabled="true">
+                Subscribe
+              </button>
+            )}
             <button type="button" className="btn-outline" onClick={useMyLocation}>
               Use my location
             </button>
           </div>
+          {!isNativeApp() && (
+            <p className="download-note">
+              Download the app for subscription and notifications —{' '}
+              <a href="/app" onClick={(e) => { e.preventDefault(); navigate('/app') }}>get the app</a>.
+            </p>
+          )}
           {msg && <p className={`form-msg ${msg.kind}`}>{msg.text}</p>}
         </form>
       </div>

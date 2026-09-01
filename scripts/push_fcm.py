@@ -45,6 +45,14 @@ def save_token(token, lat, lon, name=""):
     return toks
 
 
+def remove_token(token):
+    """Delete a device by its FCM token (unsubscribe). Returns the remaining list."""
+    toks = [t for t in load_tokens() if t.get("token") != token]
+    TOKENS.parent.mkdir(parents=True, exist_ok=True)
+    TOKENS.write_text(json.dumps(toks, indent=2))
+    return toks
+
+
 def _access_token():
     """OAuth2 bearer token for the FCM v1 API, minted (and cached/refreshed) from the SA key."""
     global _creds
