@@ -28,7 +28,7 @@
       "baseline": 0.690,
       "baseline_name": "amp + distance",
       "winner": "deep",
-      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.846; the multi-station GNN fusion earns it — a nearest-single-station ablation collapses to R² −0.17."
+      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.846; the multi-station GNN fusion earns it - a nearest-single-station ablation collapses to R² −0.17."
     },
     {
       "key": "eew_reg",
@@ -52,5 +52,5 @@
     }
   ],
   "stations": ["CCC", "CLC", "TOW2", "WBM", "PASC", "SVD", "RIO", "MWC", "DGR", "BAK"],
-  "disclaimer": "Research prototype on real California network data, not an operational warning system. The project's original geomagnetic earthquake-precursor forecast was retired after honest validation showed no out-of-sample signal; it pivoted to seismic-waveform deep learning, where the same architecture works. Short-term earthquake prediction (whether one will occur) remains unsolved — this does detection, characterization, and seconds-ahead shaking estimation."
+  "disclaimer": "Research prototype on real California network data, not an operational warning system. The project's original geomagnetic earthquake-precursor forecast was retired after honest validation showed no out-of-sample signal; it pivoted to seismic-waveform deep learning, where the same architecture works. Short-term earthquake prediction (whether one will occur) remains unsolved - this does detection, characterization, and seconds-ahead shaking estimation."
 }

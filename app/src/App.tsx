@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import { loadSeismic, type Seismic, type Task } from './seismic'
 import { caTop, geocode, liveStatus, sendContact, type UsgsEvent, type CaWindow } from './nearme'
 import { enablePush, disablePush, initPush, isNativeApp, isSubscribed } from './push'
+import { getMyLocation } from './geo'
 
 type State =
   | { status: 'loading' }
@@ -160,7 +161,7 @@ function ContactModal({ onClose }: { onClose: () => void }) {
           <button type="button" className="modal-x" onClick={onClose} aria-label="Close">×</button>
         </div>
         <p className="modal-lede">
-          Send us a message. Enter your email so we can reply — it’s used only for the reply and is
+          Send us a message. Enter your email so we can reply - it’s used only for the reply and is
           not stored.
         </p>
         <form onSubmit={submit}>
@@ -185,6 +186,18 @@ function ContactModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+// Inline arrow - an SVG chevron that inherits the text color and centres cleanly (the unicode
+// ← / → glyphs sat off the text baseline). Flip horizontally for the left-pointing variant.
+function Arrow({ dir = 'right' }: { dir?: 'left' | 'right' }) {
+  return (
+    <svg className="ar" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+      style={dir === 'left' ? { transform: 'scaleX(-1)' } : undefined}>
+      <path d="M4 12h15M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2"
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // Custom 404 in the site's own style.
 function NotFound() {
   return (
@@ -193,7 +206,7 @@ function NotFound() {
       <h1>Page not found</h1>
       <p className="app-lede">That page doesn’t exist. It may have moved, or the link was mistyped.</p>
       <p className="app-back">
-        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+        <a className="back-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}><Arrow dir="left" />Back to the console</a>
       </p>
     </section>
   )
@@ -205,14 +218,14 @@ function Privacy() {
     <section className="legal">
       <p className="eyebrow">Legal</p>
       <h1>Privacy policy</h1>
-      <p className="legal-updated">SeismicSoCal — research prototype. Last updated August 2026.</p>
+      <p className="legal-updated">SeismicSoCal - research prototype. Last updated August 2026.</p>
 
       <h2>What we collect</h2>
       <p>
         SeismicSoCal collects data <strong>only if you subscribe to alerts inside the app</strong>.
         When you subscribe we store: the name you enter, the approximate location (latitude and
         longitude) you choose, and your device’s push-notification token. The public website
-        collects no personal data and has no subscribe function — alerts exist only in the app.
+        collects no personal data and has no subscribe function - alerts exist only in the app.
       </p>
 
       <h2>How we use it</h2>
@@ -227,7 +240,7 @@ function Privacy() {
       <p>
         SeismicSoCal uses machine-learning models to detect earthquakes on a live seismic stream,
         estimate their magnitude, and estimate expected shaking. These models generate the content
-        of the alerts you receive. They run on our server against public seismic-network data — your
+        of the alerts you receive. They run on our server against public seismic-network data - your
         personal data is never used to train them, and the alert decision is an automated estimate,
         not an official warning.
       </p>
@@ -237,7 +250,7 @@ function Privacy() {
         Push notifications are delivered through <strong>Google Firebase Cloud Messaging (FCM)</strong>.
         To route a notification to your device, your push token is shared with Google as the message
         recipient; Google’s handling is governed by its own privacy policy. We also query public data
-        services that receive no personal information beyond a normal web request — the USGS /
+        services that receive no personal information beyond a normal web request - the USGS /
         EarthScope earthquake catalog, and OpenStreetMap’s Nominatim for the place name you type when
         searching for your location.
       </p>
@@ -253,11 +266,11 @@ function Privacy() {
       <h2>Contact</h2>
       <p>
         Questions about your data? <button type="button" className="linklike" onClick={contactSupport}>Contact support</button>.
-        The contact form uses the email you enter only to reply to you — it is not stored.
+        The contact form uses the email you enter only to reply to you - it is not stored.
       </p>
 
       <p className="app-back">
-        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+        <a className="back-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}><Arrow dir="left" />Back to the console</a>
       </p>
     </section>
   )
@@ -298,7 +311,7 @@ function AppDownload() {
         </div>
         <ol className="app-steps">
           <li>Download the APK on your Android device.</li>
-          <li>Open it — Android will ask to allow installs from this source. Enable it for your browser.</li>
+          <li>Open it - Android will ask to allow installs from this source. Enable it for your browser.</li>
           <li>Install, open SeismicSoCal, set your location, and tap Subscribe to turn on alerts.</li>
         </ol>
         <p className="muted app-note">
@@ -308,7 +321,7 @@ function AppDownload() {
       </div>
 
       <p className="app-back">
-        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>← Back to the console</a>
+        <a className="back-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}><Arrow dir="left" />Back to the console</a>
       </p>
     </section>
   )
@@ -404,7 +417,7 @@ function Carousel({ data }: { data: Seismic }) {
 
       <div className="carousel-controls">
         <button className="carousel-ctrl" onClick={() => go(idx.active - 1, 'prev')}>
-          ← Previous
+          <Arrow dir="left" />Previous
         </button>
         <button
           className="carousel-ctrl carousel-ctrl-icon"
@@ -421,7 +434,7 @@ function Carousel({ data }: { data: Seismic }) {
         </div>
         <span className="carousel-timer">{`${remaining}s`}</span>
         <button className="carousel-ctrl" onClick={() => go(idx.active + 1, 'next')}>
-          Next →
+          Next<Arrow dir="right" />
         </button>
       </div>
     </section>
@@ -483,7 +496,7 @@ function Evidence({
       </button>
       <div className="evidence-wrap">
         <div className="evidence-inner">
-          <img src={figure} alt={`${kicker} — deep model vs baseline on held-out data`} />
+          <img src={figure} alt={`${kicker} - deep model vs baseline on held-out data`} />
           {tech && <p className="evidence-tech">{tech}</p>}
         </div>
       </div>
@@ -491,7 +504,7 @@ function Evidence({
   )
 }
 
-// A synthetic seismograph that shakes in place — stationary, but the closer the mouse, the
+// A synthetic seismograph that shakes in place - stationary, but the closer the mouse, the
 // larger and more erratic the amplitude; calm and near-flat when the mouse is far away.
 function Trace() {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -503,7 +516,7 @@ function Trace() {
     const N = 480
     const W = 1000
     const MID = 32
-    // smooth value noise (continuous) — animating its time argument makes the line wobble
+    // smooth value noise (continuous) - animating its time argument makes the line wobble
     const hash = (n: number) => {
       const s = Math.sin(n * 127.1) * 43758.5453
       return s - Math.floor(s)
@@ -520,7 +533,7 @@ function Trace() {
     // Amplitude is bell-shaped across x: the centre swells much more than the edges as k rises.
     const frame = (phase: number, k: number) => {
       const edgeAmp = 1.3 + k * 7 // edges: calm ~1.3px, medium ~8px near the mouse
-      const centreExtra = k * 42 // extra amplitude concentrated in the middle — big swell when close
+      const centreExtra = k * 42 // extra amplitude concentrated in the middle - big swell when close
       let d = ''
       for (let i = 0; i < N; i++) {
         const nx = i / (N - 1)
@@ -529,7 +542,7 @@ function Trace() {
         const amp = edgeAmp + centreExtra * bell
         const s1 = vnoise(i * 0.4 + phase)
         const s2 = vnoise(i * 1.4 + phase * 1.9 + 40)
-        const s3 = vnoise(i * 3.0 + phase * 3.4 + 120) // sharp, high-freq — only shows up near the mouse
+        const s3 = vnoise(i * 3.0 + phase * 3.4 + 120) // sharp, high-freq - only shows up near the mouse
         const shape = s1 * 0.55 + s2 * 0.3 + s3 * 0.15 * k
         d += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${(MID + shape * amp).toFixed(2)} `
       }
@@ -589,25 +602,10 @@ function Trace() {
   )
 }
 
-// sms-tsunami-warning.com resolves by USGS event id; the place-slug and date segments are
-// cosmetic (any value returns the right page), so the id is what makes the link correct.
-function eventLink(e: UsgsEvent): string {
-  const slug =
-    (e.place || 'earthquake')
-      .replace(/^\d+\s*km\s+[NSEW]+\s+of\s+/i, '') // strip "36 km SSE of "
-      .replace(/,/g, '')
-      .trim()
-      .replace(/\s+/g, '-')
-      .replace(/[^A-Za-z0-9-]/g, '') || 'earthquake'
-  const d = e.time ? new Date(e.time) : new Date()
-  const date = `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`
-  return `https://www.sms-tsunami-warning.com/earthquakes-today/${e.id}/${slug}/${date}`
-}
-
 const fmtDate = (ms?: number) =>
   ms ? new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
-// A top-5 list (World or California) — each row links to the event's sms-tsunami-warning page.
+// A top-5 list (World or California) - each row is display-only (not a link).
 function QuakeList({ title, events }: { title: string; events?: UsgsEvent[] }) {
   return (
     <div className="qlist">
@@ -616,11 +614,11 @@ function QuakeList({ title, events }: { title: string; events?: UsgsEvent[] }) {
       <ul className="recent-list">
         {events?.map((e) => (
           <li key={e.id}>
-            <a className="recent-link" href={eventLink(e)} target="_blank" rel="noopener noreferrer">
+            <div className="recent-link">
               <span className={`m ${e.mag >= 5 ? 'hi' : ''}`}>M{e.mag.toFixed(1)}</span>
               <span className="place">{e.place}</span>
               <span className="r">{fmtDate(e.time)}</span>
-            </a>
+            </div>
           </li>
         ))}
       </ul>
@@ -702,7 +700,7 @@ function CaLargest() {
             <div key={w.key} className={`carousel-card ${cls(i)}`} aria-hidden={idx.active !== i}>
               <div className="ca-panel">
                 {d === undefined && <p className="muted">Loading…</p>}
-                {d === 'err' && <p className="muted">Feed unavailable — is the backend running?</p>}
+                {d === 'err' && <p className="muted">Feed unavailable - is the backend running?</p>}
                 {d && d !== 'err' && <QuakeList title={d.label} events={d.events} />}
               </div>
             </div>
@@ -711,7 +709,7 @@ function CaLargest() {
       </div>
       <div className="carousel-controls">
         <button className="carousel-ctrl" onClick={() => go(idx.active - 1, 'prev')}>
-          ← Previous
+          <Arrow dir="left" />Previous
         </button>
         <button
           className="carousel-ctrl carousel-ctrl-icon"
@@ -728,7 +726,7 @@ function CaLargest() {
         </div>
         <span className="carousel-timer">{`${remaining}s`}</span>
         <button className="carousel-ctrl" onClick={() => go(idx.active + 1, 'next')}>
-          Next →
+          Next<Arrow dir="right" />
         </button>
       </div>
     </section>
@@ -761,12 +759,13 @@ function NearMe() {
     }
   }
 
-  const useMyLocation = () => {
-    if (!navigator.geolocation) return setMsg({ kind: 'err', text: 'Geolocation unavailable — enter it manually.' })
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setForm((f) => ({ ...f, lat: pos.coords.latitude.toFixed(4), lon: pos.coords.longitude.toFixed(4) })),
-      () => setMsg({ kind: 'err', text: 'Couldn’t read your location — enter it manually.' })
-    )
+  const useMyLocation = async () => {
+    try {
+      const { lat, lon } = await getMyLocation()
+      setForm((f) => ({ ...f, lat: lat.toFixed(4), lon: lon.toFixed(4) }))
+    } catch {
+      setMsg({ kind: 'err', text: 'Couldn’t read your location - allow the location permission, or enter it manually.' })
+    }
   }
 
   const submit = async (e: FormEvent) => {
@@ -777,11 +776,11 @@ function NearMe() {
       const pushed = await enablePush({ name: form.name, lat: Number(form.lat), lon: Number(form.lon) })
       if (pushed === null) {
         // web build: no native push, so there's nothing to subscribe to here
-        setMsg({ kind: 'err', text: 'Alerts arrive as push notifications — install the SeismicSoCal app to subscribe.' })
+        setMsg({ kind: 'err', text: 'Alerts arrive as push notifications - install the SeismicSoCal app to subscribe.' })
         return
       }
       setSubscribed(true)
-      setMsg({ kind: 'ok', text: 'Subscribed — push alerts are enabled on this device.' })
+      setMsg({ kind: 'ok', text: 'Subscribed - push alerts are enabled on this device.' })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}.` })
     } finally {
@@ -795,7 +794,7 @@ function NearMe() {
     try {
       await disablePush()
       setSubscribed(false)
-      setMsg({ kind: 'ok', text: 'Unsubscribed — this device will no longer receive alerts.' })
+      setMsg({ kind: 'ok', text: 'Unsubscribed - this device will no longer receive alerts.' })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t unsubscribe: ${(err as Error).message}.` })
     } finally {
@@ -877,7 +876,7 @@ function NearMe() {
                 </button>
               )
             ) : (
-              // Web has no push channel — subscription lives in the app only.
+              // Web has no push channel - subscription lives in the app only.
               <button type="button" className="btn btn-struck" disabled aria-disabled="true">
                 Subscribe
               </button>
@@ -888,7 +887,7 @@ function NearMe() {
           </div>
           {!isNativeApp() && (
             <p className="download-note">
-              Download the app for subscription and notifications —{' '}
+              Download the app for subscription and notifications -{' '}
               <a href="/app" onClick={(e) => { e.preventDefault(); navigate('/app') }}>get the app</a>.
             </p>
           )}

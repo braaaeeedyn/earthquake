@@ -23,6 +23,14 @@ else
   echo "    Re-run as: VITE_API_BASE=https://your-host scripts/build_apk.sh  to ship to real phones."
 fi
 
+# Never bundle the downloadable APK into the app itself. It lives in public/, which Vite copies
+# into dist/, which cap sync then packs into the app's assets — so each rebuild would embed the
+# previous APK and the size snowballs (14 -> 20 -> 26 -> 34 MB). Strip it before building; step [4/4]
+# re-stages the freshly built one afterwards.
+rm -f "$ROOT/app/public/seismicsocal.apk" \
+      "$ROOT/app/dist/seismicsocal.apk" \
+      "$ROOT/app/android/app/src/main/assets/public/seismicsocal.apk"
+
 echo "==> [1/4] Building web app (Vite)"
 npm run build
 

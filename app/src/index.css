@@ -70,9 +70,14 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* top tabs — the three titles that dim/brighten with the active panel */
 .carousel-tabs { display: flex; gap: var(--space-6); justify-content: center; flex-wrap: wrap; margin-bottom: var(--space-4); }
-.carousel-tab { font-family: var(--font-mono); font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); opacity: 0.45; background: none; border: none; cursor: pointer; padding: 6px 2px; display: inline-flex; align-items: center; gap: 8px; transition: color 0.6s ease, opacity 0.6s ease; }
+.carousel-tab { font-family: var(--font-mono); font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); opacity: 0.45; background: none; border: none; cursor: pointer; padding: 6px 2px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; transition: color 0.6s ease, opacity 0.6s ease; }
 .carousel-tab.on { color: var(--ink); opacity: 1; }
 .carousel-tab-n { font-size: 11px; opacity: 0.55; }
+/* keep the tab row on a single line on narrow phones (shrink instead of wrapping) */
+@media (max-width: 620px) {
+  .carousel-tabs { gap: var(--space-3); flex-wrap: nowrap; }
+  .carousel-tab { font-size: 12px; letter-spacing: 0.06em; gap: 5px; }
+}
 
 /* stage: cards share one grid cell (sizes to tallest); active is centered, prev exits left, rest waits right */
 .carousel-stage { display: grid; overflow: visible; }
@@ -94,8 +99,10 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* controls: pause/play, progress dots, manual next */
 .carousel-controls { display: flex; align-items: center; justify-content: center; gap: var(--space-4); margin-top: var(--space-3); }
-.carousel-ctrl { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: none; border: 1px solid var(--hairline); border-radius: 9999px; padding: 8px 16px; cursor: pointer; }
+.carousel-ctrl { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: none; border: 1px solid var(--hairline); border-radius: 9999px; padding: 8px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .carousel-ctrl:hover { border-color: var(--ink); }
+/* inline SVG arrow — inherits color, centred by the flex parent so it sits on the text's midline */
+.ar { flex: none; display: block; }
 .carousel-ctrl-icon { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; }
 .carousel-timer { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.06em; min-width: 3.5ch; text-align: center; font-variant-numeric: tabular-nums; }
 .carousel-dots { display: flex; gap: 8px; }
@@ -111,11 +118,16 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .result .eyebrow b { color: var(--ink); font-weight: 600; margin-right: 10px; }
 .result-q { font-size: 24px; line-height: 1.2; margin-bottom: var(--space-4); }
 .stat { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; }
-.stat-num { font-family: var(--font-mono); font-size: 44px; font-weight: 500; letter-spacing: -0.02em; line-height: 1; }
+.stat-num { font-family: var(--font-mono); font-size: clamp(30px, 8.5vw, 44px); font-weight: 500; letter-spacing: -0.02em; line-height: 1; }
 .stat-metric { font-family: var(--font-mono); font-size: 12px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.08em; }
 .stat-vs { font-family: var(--font-mono); font-size: 13px; color: var(--body); margin-left: auto; }
 .stat-vs .verdict { color: var(--ink); font-weight: 600; }
 .stat-vs .verdict.tie { color: var(--mute); font-weight: 400; }
+/* keep the stat row on one line on phones — shrink the number/vs text instead of wrapping */
+@media (max-width: 620px) {
+  .stat { gap: var(--space-3); }
+  .stat-vs { font-size: 11px; }
+}
 .result-desc { color: var(--body); font-size: 15px; line-height: 1.55; margin-top: var(--space-4); text-wrap: pretty; }
 
 .evidence { margin-top: var(--space-4); }
@@ -191,6 +203,9 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 
 .notfound { padding: var(--space-8) 0 var(--space-6); }
 .notfound h1 { font-size: 34px; margin: var(--space-2) 0 var(--space-3); }
+/* back-to-console link — mono, to match the 404 / eyebrow labelling, with the aligned arrow */
+.back-link { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.back-link:hover { opacity: 0.6; }
 
 /* multiline input for the contact form — matches .field input, but a rounder-cornered box */
 .field textarea { font-family: var(--body-font); font-size: 15px; color: var(--ink); background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--card-radius); padding: 10px 16px; width: 100%; min-width: 0; resize: vertical; }
@@ -219,7 +234,6 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .recent-list li { border-top: 1px solid var(--hairline); }
 .recent-list li:first-child { border-top: none; }
 .recent-link { display: grid; grid-template-columns: 54px 1fr auto; align-items: baseline; gap: var(--space-3); padding: 9px 0; font-size: 14px; color: inherit; text-decoration: none; }
-.recent-link:hover .place { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .recent-list .m { font-family: var(--font-mono); font-weight: 600; }
 .recent-list .m.hi { color: var(--ink); font-weight: 700; }
 .recent-list .place { color: var(--body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

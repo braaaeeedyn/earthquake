@@ -231,7 +231,12 @@ def run_live(args):
 
     threading.Thread(target=scan, daemon=True).start()
     print(f"Connecting to SeedLink {args.server} ...  (Ctrl-C to stop)")
-    cli = Client_(args.server)
+    # obspy 1.5.x bug: EasySeedLinkClient auto-connects in __init__ with SeedLinkConnection.timeout
+    # left at None, and connect() passes that None into is_connected(), crashing the `< timeout`
+    # comparison. Create without auto-connecting, set an explicit timeout, then connect.
+    cli = Client_(args.server, autoconnect=False)
+    cli.conn.timeout = 30
+    cli.connect()
     for n in names:
         cli.select_stream(NET, n, "HH?")
     cli.run()
