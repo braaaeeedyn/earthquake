@@ -271,7 +271,9 @@ def start_live_watcher():
     largest-quakes display (/api/ca)."""
     global WATCHER
     script = ROOT / "scripts" / "live_watch.py"
-    proc = subprocess.Popen([sys.executable, str(script)])
+    # -u: unbuffered child stdout, so its [EVENT] lines reach journald in real time. Without it
+    # Python block-buffers the pipe and live events (and pushes) can sit hidden for a long time.
+    proc = subprocess.Popen([sys.executable, "-u", str(script)])
     WATCHER = proc
     print(f"live alert watcher (SeedLink + models) started, pid {proc.pid}")
     return proc

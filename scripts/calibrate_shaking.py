@@ -6,7 +6,7 @@ in the SAME data the magnitude model was trained on:
 
   (1) PGV attenuation  — a ground-motion model log10(PGV)=a+b*M+c*log10(R)+d*R fit to the
       per-station peak velocities the network actually recorded. Predicts shaking amplitude.
-  (2) Intensity (MMI)  — that predicted PGV mapped to Modified Mercalli intensity via Wald (1999).
+  (2) Intensity (MMI)  — that predicted PGV mapped to Modified Mercalli intensity via Worden (2012).
       Predicts the human-felt intensity, with its own threshold.
   (3) Felt-distance envelope — the maximum distance events of a given magnitude are actually
       recorded/felt in this network, capped at the data's distance range (~200 km). A geographic
@@ -28,8 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "processed" / "seismic_phase2a_xl.npz"
 OUT = ROOT / "data" / "processed" / "shaking_calibration.json"
 
-# Wald (1999) instrumental-intensity relation: MMI = 3.47*log10(PGV[cm/s]) + 2.35.
-WALD_A, WALD_B = 3.47, 2.35
+# Worden et al. (2012) bilinear GMICE for PGV (cm/s): MMI = a + b*log10(PGV), switching at
+# log10(PGV)=0.53. Valid to low intensity (~MMI 2), unlike Wald (1999) (valid MMI >= 5), which
+# underpredicts weak shaking. Published relation, not fit to this dataset.
+WORDEN_LO, WORDEN_HI, WORDEN_BRK = (3.78, 1.47), (2.89, 3.16), 0.53
 ALERT_MMI = 3.0                 # "felt" — the intensity threshold criterion (2) must clear
 FELT_PCTILE = 70                # criterion (1)/(3): "notable" shaking = this pctile of recorded PGV
 ENV_PCTILE = 90                 # criterion (3): felt-distance envelope = this pctile of felt distances
@@ -60,7 +62,9 @@ def fit_gmpe(M, R, P):
 
 
 def pgv_to_mmi(pgv_ms):
-    return max(1.0, min(10.0, WALD_A * np.log10(max(pgv_ms, 1e-9) * 100.0) + WALD_B))
+    y = np.log10(max(pgv_ms, 1e-9) * 100.0)
+    a, b = WORDEN_HI if y > WORDEN_BRK else WORDEN_LO
+    return float(max(1.0, min(10.0, a + b * y)))
 
 
 def felt_envelope(M, R, P, pgv_floor):
@@ -85,7 +89,7 @@ def main():
     gmpe, r2 = fit_gmpe(M, R, P)
     pgv_floor = float(np.percentile(P, FELT_PCTILE))
     cal = dict(gmpe=gmpe, pgv_floor=pgv_floor, alert_mmi=ALERT_MMI,
-               wald=dict(a=WALD_A, b=WALD_B), r_data_max=R_DATA_MAX)
+               gmice="worden2012_pgv", r_data_max=R_DATA_MAX)
     cal["envelope"] = felt_envelope(M, R, P, pgv_floor)
 
     print(f"GMPE fit  log10(PGV_m/s) = {gmpe['a']:.3f} + {gmpe['b']:.3f}*M "

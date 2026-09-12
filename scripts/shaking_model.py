@@ -3,12 +3,13 @@
 The live alert product has no waveform stream at the user's location, so at alert time it
 estimates shaking from the event's magnitude and the user's distance to the (proxy) epicentre,
 using models CALIBRATED on the same training data as the magnitude network
-(scripts/calibrate_shaking.py -> data/processed/shaking_calibration.json). Three criteria vote;
-an alert fires only when >= 2 agree -- to be safe and to keep results accurate:
+(scripts/calibrate_shaking.py -> data/processed/shaking_calibration.json). Three criteria vote,
+and criterion (1) -- notable PGV amplitude -- is REQUIRED for any alert, so nothing imperceptible
+pushes (in particular the felt-distance bound alone can no longer fire a notification):
 
   (1) PGV amplitude   — a ground-motion model fit to the network's recorded peak velocities
                         predicts shaking >= a "notable" floor (a data percentile).
-  (2) Intensity (MMI) — that PGV mapped to Modified Mercalli intensity (Wald 1999) >= "felt" (3).
+  (2) Intensity (MMI) — that PGV mapped to Modified Mercalli intensity (Worden et al. 2012) >= "felt" (3).
   (3) Felt-distance   — the user is within the distance at which events of this magnitude are
                         actually felt in the network, capped at the data's ~200 km range.
 
@@ -16,7 +17,7 @@ an alert fires only when >= 2 agree -- to be safe and to keep results accurate:
 bound, so the vote can't fire on distance alone or on one marginal amplitude reading. Beyond the
 trained ~200 km regime nothing alerts (no data to justify it).
 
-Intensity (MMI) is an approximation for display, not a calibrated regional model.
+Intensity (MMI) uses the standard Worden (2012) GMICE; approximate for display, not a regional model.
 """
 import json
 import math
@@ -30,7 +31,6 @@ _DEFAULT = {
     "gmpe": {"a": -5.063, "b": 0.923, "c": -0.975, "d": -0.00350},
     "pgv_floor": 0.0006,                 # m/s (~0.06 cm/s, P70 of recorded PGV)
     "alert_mmi": 3.0,
-    "wald": {"a": 3.47, "b": 2.35},      # MMI = a*log10(PGV cm/s) + b
     "envelope": {"p": 107.0, "q": 12.0}, # D_felt(M) = p + q*M km
     "r_data_max": 200.0,
 }
@@ -62,10 +62,18 @@ def estimate_pgv(mag, dist_km):
     return 10 ** (g["a"] + g["b"] * mag + g["c"] * math.log10(r) + g["d"] * r)
 
 
+# Worden et al. (2012) bilinear GMICE for PGV (cm/s): MMI = a + b*log10(PGV). Valid to low
+# intensity (~MMI 2), unlike Wald (1999)'s single line (valid MMI >= 5), which underpredicts weak
+# shaking badly. A published relation, not a per-dataset fit, so it lives here as a constant.
+WORDEN_PGV = {"lo": (3.78, 1.47), "hi": (2.89, 3.16), "brk": 0.53}  # (a, b); switch at log10(PGV)=brk
+
+
 def pgv_to_mmi(pgv_ms):
-    """Modified Mercalli intensity from PGV (m/s) via Wald (1999), PGV in cm/s. Clamped 1..10."""
-    w = CAL["wald"]
-    return max(1.0, min(10.0, w["a"] * math.log10(max(pgv_ms, 1e-9) * 100.0) + w["b"]))
+    """Modified Mercalli intensity from PGV (m/s) via the Worden et al. (2012) bilinear GMICE
+    (PGV in cm/s). Clamped 1..10."""
+    y = math.log10(max(pgv_ms, 1e-9) * 100.0)                 # log10(PGV in cm/s)
+    a, b = WORDEN_PGV["hi"] if y > WORDEN_PGV["brk"] else WORDEN_PGV["lo"]
+    return max(1.0, min(10.0, a + b * y))
 
 
 def estimate_mmi(mag, dist_km):
@@ -99,8 +107,9 @@ def describe(mmi):
 
 
 # ---- the graded alert decision (vote count -> level) ------------------------
-# 0 criteria -> no alert; 1 -> POTENTIAL earthquake warning (tentative, one indicator);
-# 2 or 3 -> EARTHQUAKE WARNING (corroborated). Levels 2 and 3 send the same warning.
+# Criterion (1) -- predicted PGV >= the data's notable-shaking floor -- is REQUIRED for ANY alert,
+# so nothing imperceptible ever pushes. Above that floor: (1) alone -> POTENTIAL earthquake
+# warning (tentative); (1) plus (2) and/or (3) -> EARTHQUAKE WARNING (corroborated).
 LEVEL_NONE, LEVEL_POTENTIAL, LEVEL_WARNING = 0, 1, 2
 LEVEL_NAME = {0: "none", 1: "potential earthquake warning", 2: "earthquake warning"}
 
@@ -115,12 +124,21 @@ def alert_votes(mag, dist_km):
 
 
 def alert_level(mag, dist_km):
-    """0 = no alert, 1 = potential warning (1 of 3 criteria), 2 = warning (>= 2 of 3)."""
-    votes = sum(alert_votes(mag, dist_km))
-    return LEVEL_WARNING if votes >= 2 else LEVEL_POTENTIAL if votes == 1 else LEVEL_NONE
+    """0 = no alert, 1 = potential warning, 2 = warning (>= 2 of 3 criteria).
+
+    Hard floor: criterion (1) -- predicted PGV >= the data's "notable shaking" amplitude floor --
+    is REQUIRED for any alert. This kills the distance-only nuisance case (an imperceptible quake,
+    e.g. an M2.4 tens of km away, that the felt-distance bound (3) alone would otherwise flag).
+    (Criterion (2), MMI >= felt, implies (1), so requiring (1) is the minimal correct gate.)
+    """
+    c1, c2, c3 = alert_votes(mag, dist_km)
+    if not c1:                          # below the notable-amplitude floor -> no notification
+        return LEVEL_NONE
+    votes = c1 + c2 + c3
+    return LEVEL_WARNING if votes >= 2 else LEVEL_POTENTIAL
 
 
 def should_alert(mag, dist_km, threshold_mmi=None):
-    """Whether ANY alert (potential or full) fires, i.e. >= 1 of the 3 criteria. `threshold_mmi`
-    is accepted for backward compatibility but ignored."""
+    """Whether ANY alert (potential or full) fires -- i.e. the estimated shaking clears the felt
+    floor (criterion 2). `threshold_mmi` is accepted for backward compatibility but ignored."""
     return alert_level(mag, dist_km) >= LEVEL_POTENTIAL

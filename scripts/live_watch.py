@@ -24,6 +24,8 @@ Run:
   python scripts/live_watch.py --server rtserve.iris.washington.edu:18000 --min-stations 4
 """
 import argparse
+import datetime
+import json
 import sys
 import threading
 import time
@@ -43,6 +45,7 @@ DETECTOR = ROOT / "data" / "processed" / "detector.pt"
 MAG_CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
 PHASE2A = ROOT / "data" / "processed" / "seismic_phase2a_xl.npz"
 PHASE1 = ROOT / "data" / "processed" / "seismic_phase1.npz"
+EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"   # durable audit log of declared events
 
 SR = 100.0
 NPTS = 3000                       # 30 s @ 100 Hz
@@ -51,10 +54,12 @@ NET = "CI"
 
 # Tunables (also CLI flags)
 DET_THRESH = 0.60                 # per-station detection probability to count as a trigger
-MIN_STATIONS = 4                  # COINCIDENCE: stations that must agree to declare an event
+MIN_STATIONS = 5                  # COINCIDENCE: stations that must agree (raised 4->5 to cut false alarms)
 COINC_WIN = 12.0                  # seconds within which triggers count toward the same event
 COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event
-# The alert decision (per subscriber) is the 2-of-3 shaking vote in shaking_model.alert_level.
+V_MIN = 2.0                       # km/s: slowest wave used to bound plausible inter-station move-out
+PICK_JITTER = 4.0                 # s: slack for detection-window / timing jitter in the move-out check
+# The alert decision (per subscriber) is the shaking vote in shaking_model.alert_level.
 
 
 # ---------------------------------------------------------------- network + models
@@ -123,17 +128,60 @@ def estimate_magnitude(models, am, asd, Xraw, mask, dist):
 
 # ---------------------------------------------------------------- event handling
 
-def declare_from_triggers(triggers, now, min_stations):
+def moveout_ok(first_time_by_sta, coords):
+    """A single seismic source can only produce inter-station arrival-time differences up to the
+    stations' separation divided by the wave speed (triangle inequality). So if any pair of
+    triggering stations fired FARTHER apart in time than a wavefront at >= V_MIN could explain,
+    the triggers cannot be one event -- reject them (this kills scattered multi-station noise).
+    A necessary condition, not a locator: it never rejects a real event, only impossible ones."""
+    stas = list(first_time_by_sta)
+    for i in range(len(stas)):
+        for j in range(i + 1, len(stas)):
+            a, b = stas[i], stas[j]
+            dt = abs(first_time_by_sta[a] - first_time_by_sta[b])
+            dkm = haversine_km(coords[a][0], coords[a][1], coords[b][0], coords[b][1])
+            if dt > dkm / V_MIN + PICK_JITTER:
+                return False
+    return True
+
+
+def declare_from_triggers(triggers, now, min_stations, coords=None):
     """Return (station_indices, strongest_idx) if >= min_stations distinct stations triggered
-    within COINC_WIN, else None. `triggers` is a deque of (time, sta_idx, prob)."""
+    within COINC_WIN AND (when coords given) their trigger-time pattern is physically consistent
+    with one source (moveout_ok), else None. `triggers` is a deque of (time, sta_idx, prob)."""
     recent = [t for t in triggers if now - t[0] <= COINC_WIN]
-    by_sta = {}
-    for _, si, p in recent:
+    by_sta = {}                       # sta_idx -> best detection prob
+    first = {}                        # sta_idx -> earliest trigger time (for the move-out check)
+    for t, si, p in recent:
         by_sta[si] = max(by_sta.get(si, 0.0), p)
+        first[si] = min(first.get(si, t), t)
     if len(by_sta) < min_stations:
+        return None
+    if coords is not None and not moveout_ok(first, coords):
         return None
     strongest = max(by_sta, key=by_sta.get)
     return sorted(by_sta), strongest
+
+
+def log_event(names, coords, stas, strongest, mag, conf, pushed):
+    """Append one declared event to the JSONL audit log (durable, flushed -- independent of stdout
+    buffering) so scripts/crosscheck_events.py can later score it against the USGS catalog."""
+    rec = {
+        "t": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "epoch": time.time(),
+        "n_stations": len(stas),
+        "stations": [names[i] for i in stas],
+        "proxy_station": names[strongest],
+        "proxy_lat": float(coords[strongest][0]),
+        "proxy_lon": float(coords[strongest][1]),
+        "mag": None if mag is None else round(float(mag), 2),
+        "det_conf": round(float(conf), 3),
+        "pushed": int(pushed),
+    }
+    EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(EVENTS_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec
 
 
 def alert_push_devices(tokens, epi_lat, epi_lon, mag, det_conf, nstations, dry_run):
@@ -207,7 +255,7 @@ def run_live(args):
                 p = detect_prob(det, w)
                 if p >= args.det_thresh:
                     triggers.append((now, idx_of[n], p))
-            decl = declare_from_triggers(triggers, now, args.min_stations)
+            decl = declare_from_triggers(triggers, now, args.min_stations, coords)
             if decl and now - last_alert[0] > COOLDOWN:
                 stas, strongest = decl
                 last_alert[0] = now
@@ -218,9 +266,10 @@ def run_live(args):
                 # reload device tokens each event so mobile users who just signed up are covered
                 psent = alert_push_devices(push_fcm.load_tokens(), epi_lat, epi_lon, mag, conf,
                                            len(stas), args.dry_run)
+                log_event(names, coords, stas, strongest, mag, conf, psent)
                 msize = f"M{mag:.1f}" if mag is not None else "size n/a"
                 print(f"[EVENT] {len(stas)} stations, near {names[strongest]} "
-                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {psent} push alerted")
+                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {psent} push alerted", flush=True)
 
     class Client_(EasySeedLinkClient):
         def on_data(self, trace):
@@ -300,7 +349,7 @@ def selftest(args):
     stations, coords = load_network()
     now = time.time()
     trig = deque((now, i, 0.9) for i in range(args.min_stations))   # K stations agree
-    decl = declare_from_triggers(trig, now, args.min_stations)
+    decl = declare_from_triggers(trig, now, args.min_stations, coords)
     assert decl, "coincidence should declare with K triggers"
     _, strongest = decl
     dev_lat, dev_lon = coords[strongest]                      # a device right at the epicenter proxy
