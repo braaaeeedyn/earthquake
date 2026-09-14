@@ -677,7 +677,7 @@ function CaLargest() {
         <div>
           <p className="eyebrow">Largest earthquakes</p>
           <h2>Biggest Southern California quakes</h2>
-          <p className="source-note">Source: USGS Earthquake Catalog</p>
+          <p className="source-note">Only quakes within range of our SoCal sensor network · Source: USGS</p>
         </div>
       </div>
       <div className="carousel-tabs" role="tablist">

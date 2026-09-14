@@ -1,0 +1,13 @@
+[Unit]
+# Scores the live watcher's declared events (data/processed/events.jsonl) against the USGS
+# catalog -> precision / false-alarm rate / recall. Output goes to journald AND a JSON report
+# the API/app can read. Triggered by seismicsocal-crosscheck.timer (nightly); harmless to run by hand.
+Description=SeismicSoCal nightly event cross-check (declared events vs USGS catalog)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/seismicsocal
+ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/crosscheck_events.py --json data/processed/crosscheck_report.json

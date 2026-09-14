@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import quake_archive  # noqa: E402
 import push_fcm  # noqa: E402
-from nearme_watch import fetch_usgs  # noqa: E402  (its import also loads .env into os.environ)
+from nearme_watch import fetch_usgs, haversine_km  # noqa: E402  (import also loads .env into os.environ)
 
 PORT = int(os.environ.get("PORT", "8000"))
 # Bind address. Default 127.0.0.1 (safe: reach it through a reverse proxy that terminates TLS).
@@ -36,6 +36,15 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 SUPPORT_TO = "braedynthompson@berkeley.edu"
 # Southern California only (the trained network's region): lat_min, lat_max, lon_min, lon_max
 CA_BOUNDS = (32.0, 36.4, -121.5, -114.0)
+# The 10 trained CI/SCEDC stations (coords from seismic_phase2a_xl.npz — the set the models learned
+# on). The "biggest SoCal quakes" browser shows only quakes within range of these stations, i.e. the
+# region the models actually cover, NOT every California quake.
+NET_COORDS = [
+    (35.5249, -117.3645), (35.8157, -117.5975), (35.8086, -117.7649), (35.6084, -117.8905),
+    (34.1714, -118.1852), (34.1065, -117.0982), (34.1047, -117.9796), (34.2236, -118.0583),
+    (33.6500, -117.0095), (35.3444, -119.1044),
+]
+NET_RADIUS_KM = 150.0        # a quake within this of any station is "in model range"
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 WATCHER = None                               # the live_watch child process (set at startup)
@@ -43,6 +52,11 @@ WATCHER = None                               # the live_watch child process (set
 
 def _in_ca(lat, lon):
     return CA_BOUNDS[0] <= lat <= CA_BOUNDS[1] and CA_BOUNDS[2] <= lon <= CA_BOUNDS[3]
+
+
+def _in_net_range(lat, lon):
+    """True if within NET_RADIUS_KM of any trained station — i.e. the models can actually see it."""
+    return any(haversine_km(lat, lon, sla, slo) <= NET_RADIUS_KM for sla, slo in NET_COORDS)
 
 
 def _is_ca_place(place):
@@ -89,7 +103,10 @@ def ca_top(window):
     for f in g.get("features", []):
         p = f.get("properties", {})
         c = (f.get("geometry") or {}).get("coordinates") or [None, None]
-        if p.get("mag") is None or not _is_ca_place(p.get("place")):
+        if p.get("mag") is None or c[0] is None or c[1] is None:
+            continue
+        # keep only quakes the models cover: SoCal by place (drops NV/Baja) AND within network range
+        if not _is_ca_place(p.get("place")) or not _in_net_range(c[1], c[0]):
             continue
         events.append({"id": f["id"], "mag": float(p["mag"]), "lat": c[1], "lon": c[0],
                        "place": p.get("place") or "California", "url": p.get("url", ""),

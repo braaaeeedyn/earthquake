@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the SeismicSoCal event cross-check daily
+
+[Timer]
+# 09:00 UTC ~= 02:00 Pacific. Persistent=true runs a missed job after downtime (e.g. host reboot).
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
