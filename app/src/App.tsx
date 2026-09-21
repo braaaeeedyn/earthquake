@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
-import { caTop, geocode, liveStatus, sendContact, type UsgsEvent, type CaWindow } from './nearme'
+import { caTop, geocode, getStations, liveStatus, sendContact, type Station, type UsgsEvent, type CaWindow } from './nearme'
 import { enablePush, disablePush, initPush, isNativeApp, isSubscribed } from './push'
 import { getMyLocation } from './geo'
 
@@ -223,15 +223,17 @@ function Privacy() {
       <h2>What we collect</h2>
       <p>
         SeismicSoCal collects data <strong>only if you subscribe to alerts inside the app</strong>.
-        When you subscribe we store: the name you enter, the approximate location (latitude and
-        longitude) you choose, and your device’s push-notification token. The public website
-        collects no personal data and has no subscribe function - alerts exist only in the app.
+        When you subscribe we store: the name you enter, the sensor stations you choose to follow,
+        and your device’s push-notification token. We do <strong>not</strong> store your location —
+        it is used only on your device, at signup, to rank which stations are nearest you, and is
+        never sent to us. The public website collects no personal data and has no subscribe function -
+        alerts exist only in the app.
       </p>
 
       <h2>How we use it</h2>
       <p>
-        Your location is used solely to decide whether a detected earthquake is close enough to
-        notify you, and your device token is used solely to deliver that push notification. We do
+        The sensor stations you follow are used solely to decide which detections to notify you
+        about, and your device token is used solely to deliver that push notification. We do
         not sell your data, use it for advertising, or share it except with the notification
         provider described below.
       </p>
@@ -733,8 +735,27 @@ function CaLargest() {
   )
 }
 
+// Auto-selection rule for "use my location": pick the nearest few stations, but never one farther
+// than the cap (roughly a M3.5's felt distance — a station beyond it can't feel your local quakes).
+const NEAR_TOP_N = 3
+const NEAR_CAP_KM = 150
+
+// Great-circle distance in km (haversine), for ranking stations by how close they are to the user.
+function kmBetween(aLat: number, aLon: number, bLat: number, bLon: number) {
+  const R = 6371
+  const rad = (d: number) => (d * Math.PI) / 180
+  const dLat = rad(bLat - aLat)
+  const dLon = rad(bLon - aLon)
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(s))
+}
+
 function NearMe() {
-  const [form, setForm] = useState({ name: '', lat: '', lon: '' })
+  const [name, setName] = useState('')
+  const [stations, setStations] = useState<Station[]>([])
+  const [dist, setDist] = useState<Record<string, number>>({})   // code -> km, empty until located
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [located, setLocated] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [subscribed, setSubscribed] = useState(isSubscribed())
@@ -742,7 +763,32 @@ function NearMe() {
   const [stateName, setStateName] = useState('CA')
   const [searching, setSearching] = useState(false)
 
-  const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value })
+  useEffect(() => {
+    getStations()
+      .then(setStations)
+      .catch(() => setMsg({ kind: 'err', text: 'Couldn’t load the sensor list — is the backend running?' }))
+  }, [])
+
+  // Given the user's coordinates, compute distance to every station and auto-select the nearest
+  // few within the cap. The coordinates are used only here to rank stations — they are never stored;
+  // only the chosen station codes are sent to the server.
+  const applyLocation = (lat: number, lon: number) => {
+    const d: Record<string, number> = {}
+    for (const s of stations) d[s.code] = kmBetween(lat, lon, s.lat, s.lon)
+    const pick = [...stations]
+      .sort((a, b) => d[a.code] - d[b.code])
+      .filter((s) => d[s.code] <= NEAR_CAP_KM)
+      .slice(0, NEAR_TOP_N)
+      .map((s) => s.code)
+    setDist(d)
+    setLocated(true)
+    setSelected(new Set(pick))
+    setMsg(
+      pick.length
+        ? { kind: 'ok', text: `Auto-selected the ${pick.length} nearest sensor${pick.length > 1 ? 's' : ''} within ${NEAR_CAP_KM} km. Tap any sensor below to add or remove it.` }
+        : { kind: 'err', text: `No sensor within ${NEAR_CAP_KM} km — you may be outside the covered region. You can still pick one manually below.` },
+    )
+  }
 
   const searchLocation = async () => {
     if (!city.trim()) return
@@ -750,8 +796,7 @@ function NearMe() {
     setMsg(null)
     try {
       const r = await geocode(`${city.trim()}, ${stateName.trim() || 'CA'}`)
-      setForm((f) => ({ ...f, lat: r.lat.toFixed(4), lon: r.lon.toFixed(4) }))
-      setMsg({ kind: 'ok', text: `Found: ${r.name}` })
+      applyLocation(r.lat, r.lon)
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t find that place: ${(err as Error).message}` })
     } finally {
@@ -760,27 +805,39 @@ function NearMe() {
   }
 
   const useMyLocation = async () => {
+    setMsg(null)
     try {
       const { lat, lon } = await getMyLocation()
-      setForm((f) => ({ ...f, lat: lat.toFixed(4), lon: lon.toFixed(4) }))
+      applyLocation(lat, lon)
     } catch {
-      setMsg({ kind: 'err', text: 'Couldn’t read your location - allow the location permission, or enter it manually.' })
+      setMsg({ kind: 'err', text: 'Couldn’t read your location - allow the location permission, or search by city.' })
     }
   }
 
+  const toggle = (code: string) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(code)) next.delete(code)
+    else next.add(code)
+    return next
+  })
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!selected.size) {
+      setMsg({ kind: 'err', text: 'Pick at least one sensor to be alerted for.' })
+      return
+    }
     setBusy(true)
     setMsg(null)
     try {
-      const pushed = await enablePush({ name: form.name, lat: Number(form.lat), lon: Number(form.lon) })
+      const pushed = await enablePush({ name, stations: [...selected] })
       if (pushed === null) {
         // web build: no native push, so there's nothing to subscribe to here
         setMsg({ kind: 'err', text: 'Alerts arrive as push notifications - install the SeismicSoCal app to subscribe.' })
         return
       }
       setSubscribed(true)
-      setMsg({ kind: 'ok', text: 'Subscribed - push alerts are enabled on this device.' })
+      setMsg({ kind: 'ok', text: `Subscribed to ${selected.size} sensor${selected.size > 1 ? 's' : ''} - push alerts are enabled on this device.` })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}.` })
     } finally {
@@ -802,14 +859,17 @@ function NearMe() {
     }
   }
 
+  // Once located, order sensors nearest-first so the user sees their distances at a glance.
+  const rows = located ? [...stations].sort((a, b) => dist[a.code] - dist[b.code]) : stations
+
   return (
     <section className="nearme">
       <p className="eyebrow">Alerts</p>
       <h2>Alert me near me</h2>
       <p className="nearme-lede">
-        A model watches the live Southern California seismic stream and, when it detects a quake
-        near you, sends a push notification with the detection, its size, and how hard it is likely
-        to shake. This is rapid detection, not an official warning.
+        A model watches the live Southern California seismic stream and pushes you a notification when
+        a sensor you follow detects a quake. You subscribe to individual sensor stations — pick the
+        ones near you. This is rapid detection, not an official warning.
         {!isNativeApp() && ' Alerts are available in the SeismicSoCal app.'}
       </p>
 
@@ -817,10 +877,10 @@ function NearMe() {
         <form onSubmit={submit}>
           <div className="field">
             <label htmlFor="nm-name">Name</label>
-            <input id="nm-name" value={form.name} onChange={set('name')} required placeholder="Your name" />
+            <input id="nm-name" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Your name" />
           </div>
           <div className="field">
-            <label htmlFor="nm-city">Search location</label>
+            <label htmlFor="nm-city">Find sensors near you</label>
             <div className="search-row">
               <input
                 id="nm-city"
@@ -854,25 +914,51 @@ function NearMe() {
               </button>
             </div>
           </div>
-          <div className="field-pair">
-            <div className="field">
-              <label htmlFor="nm-lat">Latitude</label>
-              <input id="nm-lat" value={form.lat} onChange={set('lat')} required placeholder="34.05" />
-            </div>
-            <div className="field">
-              <label htmlFor="nm-lon">Longitude</label>
-              <input id="nm-lon" value={form.lon} onChange={set('lon')} required placeholder="-118.24" />
-            </div>
-          </div>
+
+          <button type="button" className="btn-outline locate-btn" onClick={useMyLocation}>
+            Use my location
+          </button>
+
+          <fieldset className="station-picker">
+            <legend>
+              Sensor stations{located ? ' — distance from you' : ''}
+              <span className="picker-hint">
+                {located ? ' · tap to add or remove' : ' · locate yourself to see distances'}
+              </span>
+            </legend>
+            <ul className="station-list">
+              {rows.map((s) => {
+                const on = selected.has(s.code)
+                const km = dist[s.code]
+                return (
+                  <li key={s.code}>
+                    <button
+                      type="button"
+                      className={`station-row${on ? ' on' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => toggle(s.code)}
+                    >
+                      <span className="station-code">{s.code}</span>
+                      <span className="station-dist">
+                        {located && km !== undefined ? `${Math.round(km)} km` : '—'}
+                      </span>
+                      <span className="station-toggle">{on ? 'Subscribed' : 'Off'}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </fieldset>
+
           <div className="actions">
             {isNativeApp() ? (
               subscribed ? (
                 <button type="button" className="btn" onClick={unsubscribe} disabled={busy}>
-                  {busy ? 'Unsubscribing…' : 'Unsubscribe'}
+                  {busy ? 'Unsubscribing…' : 'Unsubscribe all'}
                 </button>
               ) : (
-                <button type="submit" className="btn" disabled={busy}>
-                  {busy ? 'Subscribing…' : 'Subscribe'}
+                <button type="submit" className="btn" disabled={busy || !selected.size}>
+                  {busy ? 'Subscribing…' : `Subscribe${selected.size ? ` (${selected.size})` : ''}`}
                 </button>
               )
             ) : (
@@ -881,9 +967,6 @@ function NearMe() {
                 Subscribe
               </button>
             )}
-            <button type="button" className="btn-outline" onClick={useMyLocation}>
-              Use my location
-            </button>
           </div>
           {!isNativeApp() && (
             <p className="download-note">

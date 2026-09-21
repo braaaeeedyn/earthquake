@@ -2,8 +2,8 @@
 
 No framework (Flask/FastAPI not installed). The Vite dev server proxies /api/* here, so the
 app calls /api/register-push, /api/unregister-push and /api/events with no CORS fuss. Alerts
-are push-only (app-only product); a device sends {token, lat, lon, name} and receives FCM
-pushes from the live watcher. Run alongside the app:
+are push-only (app-only product); a device sends {token, stations, name} and receives FCM
+pushes from the live watcher when one of its subscribed stations fires. Run alongside the app:
 
   python scripts/server.py            # http://localhost:8000
   cd app && npm run dev               # http://localhost:5173  (proxies /api -> :8000)
@@ -36,14 +36,18 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 SUPPORT_TO = "braedynthompson@berkeley.edu"
 # Southern California only (the trained network's region): lat_min, lat_max, lon_min, lon_max
 CA_BOUNDS = (32.0, 36.4, -121.5, -114.0)
-# The 10 trained CI/SCEDC stations (coords from seismic_phase2a_xl.npz — the set the models learned
-# on). The "biggest SoCal quakes" browser shows only quakes within range of these stations, i.e. the
-# region the models actually cover, NOT every California quake.
-NET_COORDS = [
-    (35.5249, -117.3645), (35.8157, -117.5975), (35.8086, -117.7649), (35.6084, -117.8905),
-    (34.1714, -118.1852), (34.1065, -117.0982), (34.1047, -117.9796), (34.2236, -118.0583),
-    (33.6500, -117.0095), (35.3444, -119.1044),
+# The 10 trained CI/SCEDC stations (codes + coords from seismic_phase2a_xl.npz — the set the models
+# learned on). A device subscribes to the stations nearest it; the live watcher pushes it when one of
+# those stations fires. This is also the region the "biggest SoCal quakes" browser is limited to.
+STATIONS = [
+    {"code": "CCC", "lat": 35.5249, "lon": -117.3645}, {"code": "CLC", "lat": 35.8157, "lon": -117.5975},
+    {"code": "TOW2", "lat": 35.8086, "lon": -117.7649}, {"code": "WBM", "lat": 35.6084, "lon": -117.8905},
+    {"code": "PASC", "lat": 34.1714, "lon": -118.1852}, {"code": "SVD", "lat": 34.1065, "lon": -117.0982},
+    {"code": "RIO", "lat": 34.1047, "lon": -117.9796}, {"code": "MWC", "lat": 34.2236, "lon": -118.0583},
+    {"code": "DGR", "lat": 33.6500, "lon": -117.0095}, {"code": "BAK", "lat": 35.3444, "lon": -119.1044},
 ]
+STATION_CODES = {s["code"] for s in STATIONS}
+NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
 NET_RADIUS_KM = 150.0        # a quake within this of any station is "in model range"
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -199,6 +203,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, r) if r else self._send(400, {"error": "bad window"})
             except Exception as e:
                 self._send(502, {"error": str(e)})
+        elif path == "/api/stations":
+            return self._send(200, {"stations": STATIONS})
         elif path == "/api/geocode":
             # ?q=<place> -> {lat, lon, name}, restricted to California
             q = parse_qs(urlparse(self.path).query).get("q", [""])[0].strip()
@@ -222,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # Alerts are push-only (the app-only product): a device subscribes by registering its
-        # FCM token + location, and unsubscribes by removing it. /api/contact relays a support
+        # FCM token + chosen stations, and unsubscribes by removing it. /api/contact relays a support
         # message to the hidden inbox. There is no email-based alert channel.
         if self.path not in ("/api/register-push", "/api/unregister-push", "/api/contact"):
             return self._send(404, {"error": "not found"})
@@ -238,15 +244,19 @@ class Handler(BaseHTTPRequestHandler):
         return self._unregister_push(sub)
 
     def _register_push(self, sub):
-        """Store a mobile device's FCM token + location so the live watcher can push alerts."""
-        try:
-            token = sub["token"]
-            lat, lon = float(sub["lat"]), float(sub["lon"])
-        except (KeyError, TypeError, ValueError):
-            return self._send(400, {"error": "need token, lat, lon"})
+        """Store a device's FCM token + the sensor stations it subscribes to (no coordinates) so the
+        live watcher can push it whenever one of those stations fires."""
+        token = sub.get("token")
+        stations = sub.get("stations")
         if not isinstance(token, str) or not token.strip():
-            return self._send(400, {"error": "need token, lat, lon"})
-        toks = push_fcm.save_token(token.strip(), lat, lon, str(sub.get("name", "")).strip())
+            return self._send(400, {"error": "need token and stations"})
+        if not isinstance(stations, list) or not stations:
+            return self._send(400, {"error": "pick at least one station"})
+        stations = [str(s).strip() for s in stations]
+        unknown = [s for s in stations if s not in STATION_CODES]
+        if unknown:
+            return self._send(400, {"error": f"unknown station(s): {', '.join(unknown)}"})
+        toks = push_fcm.save_token(token.strip(), stations, str(sub.get("name", "")).strip())
         self._send(200, {"ok": True, "count": len(toks)})
 
     def _unregister_push(self, sub):

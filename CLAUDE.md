@@ -266,6 +266,35 @@ is deferred (needs a dataset rebuild + retrain of the magnitude/EEW models).
 - **Secrets/PII:** `.env` (SMTP) and now **`data/subscribers.json`** are gitignored — subscriber
   emails must not be committed.
 
+### 2026-09-21 update — alerts moved to STATION-SUBSCRIPTION + GRADED coincidence
+Reverses the earlier "magnitude-scaled felt radius" + "store {location, contact}" alert decisions.
+Rationale: with a proxy epicenter (strongest station), distance-based targeting was fuzzy, and the
+5-of-10 coincidence gate missed small (M~3.5) quakes only 1–2 stations can feel. Verified via
+`live_watch.py --selftest` (both tiers + targeting) and a clean `app` TS build.
+- **Subscription unit is now a STATION, not a coordinate.** `push_tokens.json` stores
+  `{token, stations:[codes], name}` — **no lat/lon**. `push_fcm.save_token(token, stations, name)`.
+  A device's location is used only client-side at signup to rank stations, then discarded.
+- **Signup UX (`App.tsx` `NearMe`).** "Use my location" / city search → computes the user's distance
+  to each of the 10 stations, shows them nearest-first, **auto-selects the nearest 3 within a 150 km
+  cap** (`NEAR_TOP_N`/`NEAR_CAP_KM`), and each station is a tap-toggle (that's the per-sensor
+  unsubscribe). New `GET /api/stations` (server) serves codes+coords; `nearme.ts` `getStations()`.
+  `/api/register-push` now takes `{token, stations}` and validates codes ⊂ `STATION_CODES`.
+- **Graded declaration (`live_watch.py` `declare_graded`).** The hard 5-station gate is gone.
+  `MIN_STATIONS=2` = CONFIRM tier (≥2 agree + move-out check → confirmed, sized by the magnitude
+  ensemble). A lone station at prob ≥ `LONE_THRESH=0.85` → TENTATIVE alert, labelled a possible false
+  alarm (false positives > false negatives, but flagged). Weak lone triggers are suppressed. Cooldown
+  is now per-strongest-station, not one global timestamp. `events.jsonl` gains a `confirmed` flag.
+- **Alerts are per-station, combined, and distance-personalised.** `alert_push_devices` pushes each
+  device subscribed to ANY triggering station exactly once. The message states the quake is nearest
+  to the strongest station and **how far that is from the user** — distance from the proxy epicentre
+  to the user's NEAREST subscribed station (from station coords; still no stored user location).
+  `shaking_model` then estimates intensity at that distance for the message. Confirmed → "N sensors
+  agree — nearest to <strongest>, ~D km from you. Estimated M<mag>. <intensity> shaking expected.";
+  tentative → "one sensor … <D km from you> — unconfirmed, may be a false alarm". `shaking_model` is
+  on the MESSAGE path (intensity string), not the alert DECISION (which is station membership + tier).
+- Privacy policy copy updated (we no longer store location). `@capacitor/geolocation` was declared
+  but missing from `node_modules` on this checkout — `npm install` fixed it (pre-existing, unrelated).
+
 ### Next steps (prioritized, decided 2026-07-07)
 Direction after wiring `live_watch.py` as the auto-spawned alert daemon. Roughly in order:
 1. **Deploy the stack to an always-on host.** The alert product only watches while running;

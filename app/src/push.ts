@@ -37,17 +37,19 @@ function awaitToken(): Promise<string> {
   })
 }
 
-// Request permission, register for push, and send {token, location} to the server.
+// Request permission, register for push, and send {token, stations} to the server.
+// `stations` is the list of sensor codes the user chose to subscribe to (near them).
 // Returns a status string, or null on web (where push isn't available).
-export async function enablePush(loc: { name: string; lat: number; lon: number }): Promise<string | null> {
+export async function enablePush(sub: { name: string; stations: string[] }): Promise<string | null> {
   if (!Capacitor.isNativePlatform()) return null
+  if (!sub.stations.length) throw new Error('pick at least one station')
 
   let perm = await PushNotifications.checkPermissions()
   if (perm.receive !== 'granted') perm = await PushNotifications.requestPermissions()
   if (perm.receive !== 'granted') throw new Error('notification permission denied')
 
   const token = await awaitToken()
-  await registerPushToken({ token, lat: loc.lat, lon: loc.lon, name: loc.name })
+  await registerPushToken({ token, stations: sub.stations, name: sub.name })
   try {
     localStorage.setItem(SUBSCRIBED_KEY, '1')
     localStorage.setItem(TOKEN_KEY, token)

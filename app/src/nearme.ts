@@ -28,8 +28,23 @@ export interface DayTop {
   area: UsgsEvent[]
 }
 
-// Register this device's FCM token + location for push alerts (mobile app only).
-export async function registerPushToken(p: { token: string; lat: number; lon: number; name: string }) {
+// A sensor station in the trained network (code + location), from GET /api/stations.
+export interface Station {
+  code: string
+  lat: number
+  lon: number
+}
+
+// The fixed 10-station network. Used to show the user their distance to each station so they can
+// choose which ones to subscribe to.
+export async function getStations(): Promise<Station[]> {
+  const res = await fetch(api('/api/stations'))
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()).stations as Station[]
+}
+
+// Register this device's FCM token + the station codes it subscribes to (no coordinates stored).
+export async function registerPushToken(p: { token: string; stations: string[]; name: string }) {
   const res = await fetch(api('/api/register-push'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

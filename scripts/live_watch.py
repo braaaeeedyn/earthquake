@@ -4,11 +4,13 @@ waveform stream (no USGS in the loop).
 Architecture:
   SeedLink stream (10 CI/SCEDC SoCal stations)  -> rolling per-station buffers
     -> DETECTION model runs continuously on sliding 30 s vertical windows
-    -> COINCIDENCE: an event is declared only when >= K stations trigger within a short window
-       (this is what kills single-station false alarms)
-    -> location proxy (strongest-triggering station) + MAGNITUDE model sizes the event
-    -> registered devices whose estimated shaking clears a threshold get a push notification
-       (detection + size + shaking); alerts are push-only
+    -> GRADED declaration: >= K stations agreeing within a short window (+ a move-out timing check)
+       is a CONFIRMED event; a lone high-confidence station is a TENTATIVE, possibly-false alarm.
+       Small quakes only 1-2 stations can feel still alert (labelled unconfirmed) — a missed quake
+       is worse than a flagged false alarm — while the coincidence tier kills most noise.
+    -> location proxy (strongest-triggering station) + MAGNITUDE model sizes CONFIRMED events
+    -> devices subscribed to any triggering station get ONE combined push; alerts are push-only.
+       Devices subscribe to sensor STATIONS (chosen near them at signup), not coordinates.
 
 Honesty:
   - USGS is bypassed: the detector genuinely fires on the raw stream. But SeedLink latency is
@@ -54,12 +56,14 @@ NET = "CI"
 
 # Tunables (also CLI flags)
 DET_THRESH = 0.60                 # per-station detection probability to count as a trigger
-MIN_STATIONS = 5                  # COINCIDENCE: stations that must agree (raised 4->5 to cut false alarms)
+MIN_STATIONS = 2                  # CONFIRM tier: stations that must agree for a corroborated event
+LONE_THRESH = 0.85                # a SINGLE station alerts (tentative) only above this higher floor,
+                                  # so lone triggers catch small quakes without pushing on plain noise
 COINC_WIN = 12.0                  # seconds within which triggers count toward the same event
-COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event
+COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event (keyed per station)
 V_MIN = 2.0                       # km/s: slowest wave used to bound plausible inter-station move-out
 PICK_JITTER = 4.0                 # s: slack for detection-window / timing jitter in the move-out check
-# The alert decision (per subscriber) is the shaking vote in shaking_model.alert_level.
+# A device is alerted when any station it subscribes to triggers; no per-user distance is computed.
 
 
 # ---------------------------------------------------------------- network + models
@@ -145,30 +149,36 @@ def moveout_ok(first_time_by_sta, coords):
     return True
 
 
-def declare_from_triggers(triggers, now, min_stations, coords=None):
-    """Return (station_indices, strongest_idx) if >= min_stations distinct stations triggered
-    within COINC_WIN AND (when coords given) their trigger-time pattern is physically consistent
-    with one source (moveout_ok), else None. `triggers` is a deque of (time, sta_idx, prob)."""
+def declare_graded(triggers, now, confirm_stations, coords):
+    """Graded declaration over triggers within COINC_WIN. Returns (station_indices, strongest_idx,
+    confirmed) or None:
+      - >= confirm_stations distinct stations AND a physically consistent move-out -> confirmed=True
+      - exactly one station, at prob >= LONE_THRESH                                -> confirmed=False
+      - anything else (scattered multi-station noise, or a weak lone trigger)      -> None
+    `triggers` is a deque of (time, sta_idx, prob)."""
     recent = [t for t in triggers if now - t[0] <= COINC_WIN]
     by_sta = {}                       # sta_idx -> best detection prob
     first = {}                        # sta_idx -> earliest trigger time (for the move-out check)
     for t, si, p in recent:
         by_sta[si] = max(by_sta.get(si, 0.0), p)
         first[si] = min(first.get(si, t), t)
-    if len(by_sta) < min_stations:
-        return None
-    if coords is not None and not moveout_ok(first, coords):
+    if not by_sta:
         return None
     strongest = max(by_sta, key=by_sta.get)
-    return sorted(by_sta), strongest
+    if len(by_sta) >= confirm_stations and moveout_ok(first, coords):
+        return sorted(by_sta), strongest, True
+    if len(by_sta) == 1 and by_sta[strongest] >= LONE_THRESH:
+        return sorted(by_sta), strongest, False
+    return None
 
 
-def log_event(names, coords, stas, strongest, mag, conf, pushed):
+def log_event(names, coords, stas, strongest, mag, conf, pushed, confirmed):
     """Append one declared event to the JSONL audit log (durable, flushed -- independent of stdout
     buffering) so scripts/crosscheck_events.py can later score it against the USGS catalog."""
     rec = {
         "t": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "epoch": time.time(),
+        "confirmed": bool(confirmed),
         "n_stations": len(stas),
         "stations": [names[i] for i in stas],
         "proxy_station": names[strongest],
@@ -184,30 +194,40 @@ def log_event(names, coords, stas, strongest, mag, conf, pushed):
     return rec
 
 
-def alert_push_devices(tokens, epi_lat, epi_lon, mag, det_conf, nstations, dry_run):
-    """Push each device per the 2-of-3 shaking vote (shaking_model.alert_level):
-      1 criterion  -> POTENTIAL earthquake warning (tentative, one indicator)
-      2-3 criteria -> EARTHQUAKE WARNING (corroborated)
-    A short FCM notification with detection + size + shaking. Returns count sent."""
+def alert_push_devices(tokens, event_stations, strongest_name, station_coords, mag, nstations,
+                       confirmed, dry_run):
+    """Push each device subscribed to ANY of the event's stations exactly once. The message is
+    personalized by DISTANCE from the event to the user's NEAREST subscribed station — a proxy for
+    how far the quake is from them, derived from station coordinates (we store no user location).
+    `station_coords` maps station code -> (lat, lon); `event_stations`/`strongest_name` are codes.
+
+      confirmed  -> "nearest to <strongest> (~D km from you), M<mag>, <intensity> shaking expected"
+      tentative  -> "one sensor <D km from you> — unconfirmed, may be a false alarm" """
+    event_set = set(event_stations)
+    slat, slon = station_coords[strongest_name]
     sent = 0
     for t in tokens:
-        if mag is None:
-            continue                                  # no size -> no shaking-based decision
-        dist = haversine_km(epi_lat, epi_lon, t["lat"], t["lon"])
-        level = shaking_model.alert_level(mag, dist)
-        if level == shaking_model.LEVEL_NONE:
-            continue
-        mmi = shaking_model.estimate_mmi(mag, dist)
-        label, _ = shaking_model.describe(mmi)
-        if level == shaking_model.LEVEL_WARNING:
-            title = f"Earthquake warning: M{mag:.1f} — {label.lower()} shaking"
-            body = (f"Detected ~{dist:.0f} km away on {nstations} stations. "
-                    f"Estimated intensity {round(mmi)}/10. Research prototype, not an official warning.")
-        else:                                         # LEVEL_POTENTIAL
-            title = f"Potential earthquake nearby: M{mag:.1f}"
-            body = (f"A possible quake ~{dist:.0f} km away (one of three shaking checks). "
-                    f"Estimated intensity {round(mmi)}/10. Unconfirmed — research prototype, "
-                    f"not an official warning.")
+        subs = [s for s in t.get("stations", []) if s in station_coords]
+        if event_set.isdisjoint(subs):
+            continue                                  # device isn't subscribed to any triggering station
+        # distance from the (proxy) epicentre to the user's nearest subscribed sensor
+        d = min(haversine_km(slat, slon, station_coords[s][0], station_coords[s][1]) for s in subs)
+        where = (f"at the {strongest_name} station near you" if d < 15
+                 else f"nearest to the {strongest_name} station, about {d:.0f} km from you")
+        if confirmed:
+            size = f" Estimated M{mag:.1f}." if mag is not None else ""
+            shake = ""
+            if mag is not None:
+                label, _ = shaking_model.describe(shaking_model.estimate_mmi(mag, d))
+                shake = (" Likely too far to be felt at your area." if label == "Not felt"
+                         else f" {label} shaking expected at your area.")
+            title = f"Earthquake detected near {strongest_name}"
+            body = (f"{nstations} sensors agree — {where}.{size}{shake} "
+                    f"Rapid detection, not an official warning.")
+        else:
+            title = f"Possible quake near {strongest_name}"
+            body = (f"One sensor detected possible shaking {where} — unconfirmed and may be a false "
+                    f"alarm (no other station agrees yet). Not an official warning.")
         if push_fcm.send_push(t["token"], title, body, dry_run):
             sent += 1
     return sent
@@ -223,6 +243,7 @@ def run_live(args):
     stations, coords = load_network()
     names = [s.split(".")[1] for s in stations]
     idx_of = {n: i for i, n in enumerate(names)}
+    coord_of = {n: (float(coords[i][0]), float(coords[i][1])) for i, n in enumerate(names)}
     det = load_detector()
     try:
         mag_models, am, asd = load_magnitude(coords)
@@ -236,7 +257,7 @@ def run_live(args):
     buffers = {n: obspy.Stream() for n in names}     # per-station rolling 3C stream
     lock = threading.Lock()
     triggers = deque(maxlen=200)
-    last_alert = [0.0]
+    last_alert = {}                                  # strongest sta_idx -> time of its last alert
 
     def scan():
         while True:
@@ -255,20 +276,24 @@ def run_live(args):
                 p = detect_prob(det, w)
                 if p >= args.det_thresh:
                     triggers.append((now, idx_of[n], p))
-            decl = declare_from_triggers(triggers, now, args.min_stations, coords)
-            if decl and now - last_alert[0] > COOLDOWN:
-                stas, strongest = decl
-                last_alert[0] = now
+            decl = declare_graded(triggers, now, args.min_stations, coords)
+            if decl and now - last_alert.get(decl[1], 0.0) > COOLDOWN:
+                stas, strongest, confirmed = decl
+                last_alert[strongest] = now
                 epi_lat, epi_lon = coords[strongest]
-                conf = max(p for t, si, p in triggers if now - t <= COINC_WIN)
+                conf = max((p for t, si, p in triggers if now - t <= COINC_WIN and si in stas),
+                           default=0.0)
+                # size only CONFIRMED events (the magnitude ensemble needs the multi-station data)
                 mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
-                    if mag_models else None
+                    if (confirmed and mag_models) else None
+                event_names = [names[i] for i in stas]
                 # reload device tokens each event so mobile users who just signed up are covered
-                psent = alert_push_devices(push_fcm.load_tokens(), epi_lat, epi_lon, mag, conf,
-                                           len(stas), args.dry_run)
-                log_event(names, coords, stas, strongest, mag, conf, psent)
-                msize = f"M{mag:.1f}" if mag is not None else "size n/a"
-                print(f"[EVENT] {len(stas)} stations, near {names[strongest]} "
+                psent = alert_push_devices(push_fcm.load_tokens(), event_names, names[strongest],
+                                           coord_of, mag, len(stas), confirmed, args.dry_run)
+                log_event(names, coords, stas, strongest, mag, conf, psent, confirmed)
+                tag = "EVENT" if confirmed else "TENTATIVE"
+                msize = f"M{mag:.1f}" if mag is not None else ("size n/a" if confirmed else "unconfirmed")
+                print(f"[{tag}] {len(stas)} station(s), near {names[strongest]} "
                       f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {psent} push alerted", flush=True)
 
     class Client_(EasySeedLinkClient):
@@ -345,27 +370,50 @@ def replay(args):
 
 
 def selftest(args):
-    """Deterministic pipeline check: fake >=K coincident triggers -> declare -> push alert (dry-run)."""
+    """Deterministic pipeline check (dry-run): both alert tiers, and station-based targeting."""
     stations, coords = load_network()
+    names = [s.split(".")[1] for s in stations]
+    coord_of = {n: (float(coords[i][0]), float(coords[i][1])) for i, n in enumerate(names)}
     now = time.time()
-    trig = deque((now, i, 0.9) for i in range(args.min_stations))   # K stations agree
-    decl = declare_from_triggers(trig, now, args.min_stations, coords)
-    assert decl, "coincidence should declare with K triggers"
-    _, strongest = decl
-    dev_lat, dev_lon = coords[strongest]                      # a device right at the epicenter proxy
-    epi_lat, epi_lon = dev_lat + 0.2, dev_lon                 # a quake ~22 km from that device
-    mag = 5.2
-    print(f"[selftest] declared event near {stations[strongest]}, placed M{mag} "
-          f"~{haversine_km(epi_lat, epi_lon, dev_lat, dev_lon):.0f} km from the test device")
-    fake = [{"token": "selftest-token", "lat": dev_lat, "lon": dev_lon, "name": "selftest"}]
-    p = alert_push_devices(fake, epi_lat, epi_lon, mag, 0.95, args.min_stations, dry_run=True)
-    print(f"[selftest] {p} device(s) would be pushed (dry-run)")
+
+    # CONFIRMED: K stations agree -> combined push to a device subscribed to one of them.
+    trig = deque((now, i, 0.9) for i in range(args.min_stations))
+    decl = declare_graded(trig, now, args.min_stations, coords)
+    assert decl and decl[2] is True, "K agreeing stations should confirm"
+    stas, strongest, confirmed = decl
+    event_names = [names[i] for i in stas]
+    # a subscriber whose only station is a FAR one (so the message shows a real distance from them)
+    far = max(names, key=lambda n: haversine_km(*coord_of[names[strongest]], *coord_of[n]))
+    subbed = {"token": "selftest-token", "stations": [far], "name": "subbed"}
+    other = {"token": "other-token", "stations": [names[(strongest + 5) % len(names)]], "name": "other"}
+    # targeting: only devices subscribed to a triggering station are recipients (dry-run send returns
+    # False, so we assert on the membership filter directly rather than on the sent count).
+    recipients = [t["name"] for t in (subbed, other) if not set(event_names).isdisjoint(t["stations"])]
+    assert recipients == [], "a subscriber to a non-triggering station must NOT be alerted"
+    subbed["stations"] = [names[strongest], far]      # now they follow a triggering station too
+    alert_push_devices([subbed, other], event_names, names[strongest], coord_of, 5.2, len(stas), True, dry_run=True)
+    print(f"[selftest] CONFIRMED near {names[strongest]}: message shows distance to the user's "
+          f"nearest subscribed sensor + estimated shaking")
+
+    # TENTATIVE: a single high-confidence station -> unconfirmed push to its subscribers only.
+    lone = deque([(now, 0, 0.92)])
+    decl2 = declare_graded(lone, now, args.min_stations, coords)
+    assert decl2 and decl2[2] is False, "a lone strong station should be tentative"
+    alert_push_devices([{"token": "t", "stations": [names[0]], "name": "s"}],
+                       [names[0]], names[0], coord_of, None, 1, False, dry_run=True)
+    print(f"[selftest] TENTATIVE near {names[0]}: unconfirmed push to its subscribers (may be false)")
+
+    # A weak lone station must NOT alert.
+    assert declare_graded(deque([(now, 0, 0.7)]), now, args.min_stations, coords) is None, \
+        "a weak lone station should not declare"
+    print("[selftest] weak lone trigger correctly suppressed")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", default="rtserve.iris.washington.edu:18000", help="SeedLink host:port")
-    ap.add_argument("--min-stations", type=int, default=MIN_STATIONS, dest="min_stations")
+    ap.add_argument("--min-stations", type=int, default=MIN_STATIONS, dest="min_stations",
+                    help="stations that must agree to CONFIRM an event (fewer => a tentative alert)")
     ap.add_argument("--det-thresh", type=float, default=DET_THRESH, dest="det_thresh")
     ap.add_argument("--scan", type=float, default=2.0, help="seconds between detection scans")
     ap.add_argument("--dry-run", action="store_true", help="print instead of pushing")

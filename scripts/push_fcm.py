@@ -1,9 +1,10 @@
 """Firebase Cloud Messaging (FCM HTTP v1) push sender + device-token store.
 
 The mobile app (SeismicSoCal, Capacitor + @capacitor/push-notifications) registers each
-device with FCM, gets a token, and POSTs {token, lat, lon, name} to the server's
-/api/register-push. This module persists those tokens and pushes alerts to them, mirroring
-the email path in live_watch.py.
+device with FCM, gets a token, and POSTs {token, stations, name} to the server's
+/api/register-push — where `stations` is the list of sensor codes the device subscribes to
+(the ones nearest the user, chosen at signup). We store the station subscription, NOT the
+user's coordinates, so the live watcher can push a device whenever one of its stations fires.
 
 Auth: FCM's legacy server key is retired, so we use the HTTP v1 API with an OAuth2 access
 token minted from the service-account key (Firebase console -> Project settings ->
@@ -34,11 +35,12 @@ def load_tokens():
     return []
 
 
-def save_token(token, lat, lon, name=""):
-    """Upsert a device by token (a device's FCM token is its identity). Returns the full list."""
+def save_token(token, stations, name=""):
+    """Upsert a device by token (a device's FCM token is its identity). `stations` is the list of
+    sensor codes this device subscribes to (e.g. ['CCC','MWC']). Returns the full list."""
     toks = load_tokens()
-    entry = {"token": token, "lat": float(lat), "lon": float(lon), "name": name}
-    toks = [t for t in toks if t.get("token") != token]     # replace stale location for same device
+    entry = {"token": token, "stations": [str(s) for s in stations], "name": name}
+    toks = [t for t in toks if t.get("token") != token]     # replace stale subscription for same device
     toks.append(entry)
     TOKENS.parent.mkdir(parents=True, exist_ok=True)
     TOKENS.write_text(json.dumps(toks, indent=2))
