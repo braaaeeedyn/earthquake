@@ -184,8 +184,9 @@ parts (they don't need to feed each other).
 `app/src/App.tsx` renders three result ROWS (01 Detect / 02 Size / 03 Warn — a real pipeline,
 so numbered), each = big mono stat + baseline + verdict + one sentence + an "Evidence" `<details>`
 disclosure holding its demo figure (`app/public/{detection,magnitude,eew}_demo.png`). Reads
-`app/public/seismic.json` (real reproducible ensemble numbers: detection AUC 0.977, magnitude
-R² 0.846, EEW R² 0.728 / alert recall 0.65). Hero has a synthetic seismogram-trace signature.
+`app/public/seismic.json` (real reproducible ensemble numbers, refreshed 2026-09-21 on the larger
+2000–2025 dataset: detection AUC 0.992, magnitude R² 0.840, EEW R² 0.728 / alert MCC 0.760). Hero
+has a synthetic seismogram-trace signature.
 **LIGHT MODE ONLY (decided 2026-07-06).** The dark/xAI theme + the theme toggle were REMOVED —
 the user chose the light look and wants it for the rest of the project. Do NOT reintroduce a
 dark theme or toggle. The single theme is **Ollama-referenced light** (paper-white, center
@@ -294,6 +295,23 @@ Rationale: with a proxy epicenter (strongest station), distance-based targeting 
   on the MESSAGE path (intensity string), not the alert DECISION (which is station membership + tier).
 - Privacy policy copy updated (we no longer store location). `@capacitor/geolocation` was declared
   but missing from `node_modules` on this checkout — `npm install` fixed it (pre-existing, unrelated).
+
+### 2026-09-21 — retrained detection + magnitude on MORE data (2010–2023 → 2000–2025)
+Same 10/6 stations, same task (M≥3.5/≤200km/≥3-sta for magnitude; M≥3.0/≤120km for detection), same
+chronological 70/15/15 split. Only the catalog window widened. `seismic_build.py` /
+`seismic_build_multi.py` gained `--start`/`--end` (note: `load_catalog` caches to a date-agnostic
+CSV — move `data/raw/usgs_california_seis_m2.5.csv` aside before a re-fetch, or the old range is
+silently reused). Baselines backed up as `data/processed/*_baseline.*`.
+- **Magnitude:** 794 → **1,126 events**. Ensemble R² **0.846 → 0.840** (flat), but single-seed spread
+  tightened ~4× (±0.121 → ±0.029), on a larger n=169 test set; ablation −0.17 → +0.42. The amp+dist
+  baseline also rose (0.690 → **0.749**), so deep's margin narrowed to +0.09 (still positive).
+- **Detection:** 1,700 → **5,863 windows**. Deep AUC **0.978 → 0.992** (MCC 0.806 → 0.930) on a ~3×
+  larger n=880 test set. STA/LTA baseline 0.605 → 0.550. Clear improvement. (PFO returned no data this
+  run → detection effectively used 5 of 6 stations; investigate channel availability to restore it.)
+- **Takeaway:** more data helped detection clearly and made magnitude more *robust* (not higher peak
+  R²); both evaluated on bigger held-out sets, so more trustworthy. `detector.pt` /
+  `magnitude_ensemble.pt` are now the larger-data models. App numbers (`seismic.json`) + `App.tsx`
+  tech copy + demo figures refreshed to match. EEW was NOT retrained (numbers unchanged).
 
 ### Next steps (prioritized, decided 2026-07-07)
 Direction after wiring `live_watch.py` as the auto-spawned alert daemon. Roughly in order:

@@ -13,13 +13,13 @@ type State =
 const ROWS = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detection_demo.png',
-    desc: 'Give it 30 seconds of shaking recorded by a sensor and it decides whether a real earthquake is happening or whether it is just ordinary background noise like traffic or wind. It has learned what genuine quakes look like, so it spots ones that the older, simpler alarm would miss. On earthquakes it had never seen before, it makes the right call about 98% of the time.',
+    desc: 'Give it 30 seconds of shaking recorded by a sensor and it decides whether a real earthquake is happening or whether it is just ordinary background noise like traffic or wind. It has learned what genuine quakes look like, so it spots ones that the older, simpler alarm would miss. On earthquakes it had never seen before, it makes the right call about 99% of the time.',
     tech: '',
   },
   {
     n: '02', kicker: 'Size', key: 'magnitude', q: 'How big is it?', figure: 'magnitude_demo.png',
     desc: 'It estimates the size, or magnitude, of the earthquake by looking at the readings from many sensor stations at the same time. Combining the whole network of stations is what makes the estimate accurate. Relying on only the one station nearest the quake barely works.',
-    tech: 'Technical: network-magnitude regression. Per-station 3-component waveforms feed a CNN feature extractor, then a graph convolution across the 10-station network, then a transformer, then a magnitude head. The 5-seed ensemble scores R² = 0.846 (MAE 0.15) versus an amplitude + distance linear baseline at R² = 0.690. A nearest-single-station ablation collapses to R² −0.17, isolating the multi-station graph fusion as the source of the skill.',
+    tech: 'Technical: network-magnitude regression. Per-station 3-component waveforms feed a CNN feature extractor, then a graph convolution across the 10-station network, then a transformer, then a magnitude head. On 1,126 SoCal events (2000–2025), the 5-seed ensemble scores R² = 0.840 (MAE 0.12) versus an amplitude + distance linear baseline at R² = 0.749. A nearest-single-station ablation drops to R² +0.42, isolating the multi-station graph fusion as the source of the skill.',
   },
   {
     n: '03', kicker: 'Warn', key: 'eew_alert', q: 'How hard will it shake?', figure: 'eew_demo.png',

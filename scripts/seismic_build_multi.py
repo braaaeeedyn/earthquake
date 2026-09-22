@@ -22,10 +22,12 @@ def main():
     ap.add_argument("--max-dist", type=float, default=200.0)
     ap.add_argument("--min-stations", type=int, default=3)
     ap.add_argument("--max-events", type=int, default=400)
+    ap.add_argument("--start", default="2010-01-01", help="catalog start date (YYYY-MM-DD)")
+    ap.add_argument("--end", default="2023-12-31", help="catalog end date (YYYY-MM-DD)")
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
 
-    cat = load_catalog("2010-01-01", "2023-12-31", min_mag=2.5)
+    cat = load_catalog(args.start, args.end, min_mag=2.5)
     print(f"catalog {len(cat)} events; building multi-station 3C samples "
           f"(M>={args.min_mag}, <= {args.max_dist}km, >= {args.min_stations} stations)...", flush=True)
     ds = build_multistation(cat, min_mag=args.min_mag, max_dist_km=args.max_dist,

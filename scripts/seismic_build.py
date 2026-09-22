@@ -23,10 +23,12 @@ def main():
     ap.add_argument("--max-event", type=int, default=200)
     ap.add_argument("--max-noise", type=int, default=200)
     ap.add_argument("--nstations", type=int, default=len(STATIONS))
+    ap.add_argument("--start", default="2010-01-01", help="catalog start date (YYYY-MM-DD)")
+    ap.add_argument("--end", default="2023-12-31", help="catalog end date (YYYY-MM-DD)")
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
 
-    cat = load_catalog("2010-01-01", "2023-12-31", min_mag=2.5)
+    cat = load_catalog(args.start, args.end, min_mag=2.5)
     print(f"catalog: {len(cat)} events; building from {args.nstations} stations "
           f"(M>={args.min_mag}, <= {args.max_dist} km, "
           f"<= {args.max_event} ev + {args.max_noise} noise/station)...", flush=True)

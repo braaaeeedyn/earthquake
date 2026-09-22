@@ -1,9 +1,9 @@
 {
   "project": "Seismic deep learning",
   "model": "CNN + GNN + Transformer (shared backbone)",
-  "generated_at": "2026-07-06",
+  "generated_at": "2026-09-21",
   "dataset": {
-    "events": 794,
+    "events": 1126,
     "stations": 10,
     "mag_min": 3.5,
     "mag_max": 7.1,
@@ -14,21 +14,21 @@
       "key": "detection",
       "name": "Detection",
       "metric": "ROC-AUC",
-      "deep": 0.977,
-      "baseline": 0.605,
+      "deep": 0.992,
+      "baseline": 0.550,
       "baseline_name": "STA/LTA",
       "winner": "deep",
-      "desc": "Is an earthquake present in a 30-second window? The CNN+Transformer learns waveform morphology a classic threshold detector can't. 5-seed mean AUC 0.977±0.003 on held-out data."
+      "desc": "Is an earthquake present in a 30-second window? The CNN+Transformer learns waveform morphology a classic threshold detector can't. 5-seed mean AUC 0.992±0.007 on a held-out test set of 880 windows (255 events)."
     },
     {
       "key": "magnitude",
       "name": "Magnitude",
       "metric": "R²",
-      "deep": 0.846,
-      "baseline": 0.690,
+      "deep": 0.840,
+      "baseline": 0.749,
       "baseline_name": "amp + distance",
       "winner": "deep",
-      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.846; the multi-station GNN fusion earns it - a nearest-single-station ablation collapses to R² −0.17."
+      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.840 on 1,126 events (2000–2025); the multi-station GNN fusion earns it - a nearest-single-station ablation drops to R² +0.42."
     },
     {
       "key": "eew_reg",
