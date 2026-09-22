@@ -51,7 +51,7 @@ EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"   # durable audit log 
 
 SR = 100.0
 NPTS = 3000                       # 30 s @ 100 Hz
-SCALE = 7.775235e-4               # training amplitude scale = X[mask].std() over phase2a_xl (m/s)
+SCALE = 6.954687e-4               # training amplitude scale = X[mask].std() over phase2a_xl (m/s)
 NET = "CI"
 
 # Tunables (also CLI flags)
