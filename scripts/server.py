@@ -48,6 +48,11 @@ STATIONS = [
 ]
 STATION_CODES = {s["code"] for s in STATIONS}
 NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
+# App version gate. `LATEST` = newest released app; `MIN` = lowest version allowed to run. The
+# installed app compares itself: behind MIN on MAJOR or MINOR -> blocked (must re-download); a PATCH
+# gap is only a soft notice. Bump LATEST every release; bump MIN (major/minor) to FORCE an update.
+APP_LATEST_VERSION = "1.00.00"
+APP_MIN_VERSION = "1.00.00"
 NET_RADIUS_KM = 150.0        # a quake within this of any station is "in model range"
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -205,6 +210,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"error": str(e)})
         elif path == "/api/stations":
             return self._send(200, {"stations": STATIONS})
+        elif path == "/api/version":
+            return self._send(200, {"latest": APP_LATEST_VERSION, "min": APP_MIN_VERSION})
         elif path == "/api/geocode":
             # ?q=<place> -> {lat, lon, name}, restricted to California
             q = parse_qs(urlparse(self.path).query).get("q", [""])[0].strip()

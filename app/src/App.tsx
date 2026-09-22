@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
-import { caTop, geocode, getStations, liveStatus, sendContact, type Station, type UsgsEvent, type CaWindow } from './nearme'
+import { caTop, geocode, getAppVersion, getStations, liveStatus, sendContact, type Station, type UsgsEvent, type CaWindow } from './nearme'
 import { enablePush, disablePush, initPush, isNativeApp, isSubscribed } from './push'
 import { getMyLocation } from './geo'
+import { APP_VERSION, mustUpdate, updateAvailable } from './version'
+
+// The public site, for sending the app to the download/update page in an external browser.
+const APP_SITE = 'https://seismicsocal.duckdns.org'
 
 type State =
   | { status: 'loading' }
@@ -55,6 +59,7 @@ export default function App() {
   const [live, setLive] = useState(false)
   const [path, setPath] = useState(() => window.location.pathname)
   const [contactOpen, setContactOpen] = useState(false)
+  const [gate, setGate] = useState<{ blocked: boolean; latest: string } | null>(null)
 
   useEffect(() => {
     let active = true
@@ -62,6 +67,13 @@ export default function App() {
       .then((data) => active && setState({ status: 'ready', data }))
       .catch((e) => active && setState({ status: 'error', message: String(e?.message ?? e) }))
     initPush()          // register foreground push handlers (no-op on web)
+    if (isNativeApp()) {
+      // Version gate (installed app only): behind the server's MIN on major/minor -> block. Fail OPEN
+      // on a network error so an offline user is never locked out by a failed check.
+      getAppVersion()
+        .then((v) => active && setGate({ blocked: mustUpdate(APP_VERSION, v.min), latest: v.latest }))
+        .catch(() => active && setGate({ blocked: false, latest: APP_VERSION }))
+    }
     const checkLive = () => liveStatus().then((v) => active && setLive(v))
     checkLive()
     const id = setInterval(checkLive, 15000)   // poll the SeedLink watcher status
@@ -80,6 +92,11 @@ export default function App() {
   const route = ROUTE_OF(path)
   useEffect(() => { document.title = PAGE_TITLES[route] }, [route])
 
+  // A required update (major/minor behind) blocks the whole app until re-downloaded.
+  if (gate?.blocked) return <UpdateRequired latest={gate.latest} />
+
+  const softUpdate = gate && !gate.blocked && updateAvailable(APP_VERSION, gate.latest)
+
   return (
     <div className="app">
       <nav className="nav">
@@ -88,6 +105,13 @@ export default function App() {
           <span className={`dot ${live ? 'on' : ''}`} aria-hidden /> {live ? 'live · SeedLink' : 'offline · SeedLink'}
         </span>
       </nav>
+
+      {softUpdate && (
+        <p className="update-banner">
+          A newer version (v{gate!.latest}) is available.{' '}
+          <a href={`${APP_SITE}/app`} target="_blank" rel="noopener">Update</a>
+        </p>
+      )}
 
       <main className="content">
         {route === 'app' && <AppDownload />}
@@ -115,6 +139,7 @@ export default function App() {
           <span aria-hidden> · </span>
           <button type="button" className="linklike" onClick={contactSupport}>Contact support</button>
         </p>
+        <p className="footer-ver">v{APP_VERSION}</p>
       </footer>
 
       {contactOpen && <ContactModal onClose={() => setContactOpen(false)} />}
@@ -279,6 +304,26 @@ function Privacy() {
 }
 
 // The /app subpage: download the Android app (APK) that unlocks subscription + push alerts.
+// Full-screen block shown when the installed app is behind the server's minimum version (major/minor).
+// The app can't self-update (sideloaded APK), so it sends the user to the download page to reinstall.
+function UpdateRequired({ latest }: { latest: string }) {
+  const url = `${APP_SITE}/app`
+  return (
+    <div className="app update-gate">
+      <section className="update-card card">
+        <p className="eyebrow">Update required</p>
+        <h1>Time to update</h1>
+        <p className="update-lede">
+          This version (v{APP_VERSION}) is out of date and can no longer run. Version {latest} is
+          available — download and install it over this app, then reopen.
+        </p>
+        <a className="btn" href={url} target="_blank" rel="noopener">Download the update</a>
+        <p className="muted update-url">Or open <strong>{APP_SITE.replace('https://', '')}/app</strong> in your browser.</p>
+      </section>
+    </div>
+  )
+}
+
 function AppDownload() {
   // Read the real APK size from the file itself so the page can't advertise a stale number.
   const [sizeMB, setSizeMB] = useState<string | null>(null)
@@ -307,7 +352,7 @@ function AppDownload() {
         <div className="app-card-row">
           <div>
             <p className="app-file">seismicsocal.apk</p>
-            <p className="muted app-file-sub">Android{sizeMB ? ` · ${sizeMB} MB` : ''} · debug build</p>
+            <p className="muted app-file-sub">Android · v{APP_VERSION}{sizeMB ? ` · ${sizeMB} MB` : ''}</p>
           </div>
           <a className="btn" href="/seismicsocal.apk" download="seismicsocal.apk">Download APK</a>
         </div>

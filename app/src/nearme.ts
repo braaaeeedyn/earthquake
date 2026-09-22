@@ -125,6 +125,13 @@ export async function liveStatus(): Promise<boolean> {
   }
 }
 
+// The server's app-version policy: `latest` released and `min` allowed to run.
+export async function getAppVersion(): Promise<{ latest: string; min: string }> {
+  const res = await fetch(api('/api/version'))
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()) as { latest: string; min: string }
+}
+
 // Turn a place name into coordinates (server-side geocode).
 export async function geocode(q: string): Promise<{ lat: number; lon: number; name: string }> {
   const res = await fetch(api(`/api/geocode?q=${encodeURIComponent(q)}`))
