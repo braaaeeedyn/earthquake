@@ -3,14 +3,14 @@ waveform stream (no USGS in the loop).
 
 Architecture:
   SeedLink stream (10 CI/SCEDC SoCal stations)  -> rolling per-station buffers
+    -> DATA-QUALITY gate (`clean_window`) drops artefact windows -- gap-fill zeros, stuck/flat runs,
+       clipping, glitch spikes -- BEFORE scoring, so live telemetry junk can't masquerade as an onset
     -> DETECTION model runs continuously on sliding 30 s vertical windows
-    -> GRADED declaration: >= K stations agreeing within a short window (+ a move-out timing check)
-       is a CONFIRMED event; a lone high-confidence station is a TENTATIVE, possibly-false alarm.
-       Small quakes only 1-2 stations can feel still alert (labelled unconfirmed) — a missed quake
-       is worse than a flagged false alarm — while the coincidence tier kills most noise.
+    -> GRADED declaration: >= K stations that CLUSTER together (<= COHERENCE_KM) + a move-out check =
+       a CONFIRMED event; a lone high-confidence station = a TENTATIVE one. Only CONFIRMED events are
+       PUSHED (tentatives are logged, not pushed -- lone live triggers are almost all noise).
     -> location proxy (strongest-triggering station) + MAGNITUDE model sizes CONFIRMED events
-    -> devices subscribed to any triggering station get ONE combined push; alerts are push-only.
-       Devices subscribe to sensor STATIONS (chosen near them at signup), not coordinates.
+    -> devices subscribed to any triggering station get ONE combined push (STATION subscription, no coords)
 
 Honesty:
   - USGS is bypassed: the detector genuinely fires on the raw stream. But SeedLink latency is
@@ -63,6 +63,13 @@ COINC_WIN = 12.0                  # seconds within which triggers count toward t
 COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event (keyed per station)
 V_MIN = 2.0                       # km/s: slowest wave used to bound plausible inter-station move-out
 PICK_JITTER = 4.0                 # s: slack for detection-window / timing jitter in the move-out check
+COHERENCE_KM = 150.0              # CONFIRM tier: agreeing stations must cluster within this of the
+                                  # strongest one. A real local quake lights up NEIGHBOURS; two far-apart
+                                  # stations glitching in the same 12 s window are independent noise, not
+                                  # one source (move-out alone can't reject that at a short window).
+# ALERT POLICY: only CONFIRMED (>= MIN_STATIONS coherent stations) events are PUSHED. Lone-station
+# triggers are still declared + logged (tentative) but NOT pushed -- on the live stream they are almost
+# all telemetry noise. `clean_window` (below) also gates artefact windows out before the detector runs.
 # A device is alerted when any station it subscribes to triggers; no per-user distance is computed.
 
 
@@ -149,12 +156,43 @@ def moveout_ok(first_time_by_sta, coords):
     return True
 
 
+def _max_run(w):
+    """Length of the longest run of identical consecutive samples (stuck / flat / zero-fill signature)."""
+    change = np.flatnonzero(np.diff(w) != 0)
+    if change.size == 0:
+        return len(w)
+    bounds = np.concatenate(([-1], change, [len(w) - 1]))
+    return int(np.diff(bounds).max())
+
+
+def clean_window(w):
+    """Data-quality gate. Reject a live window carrying telemetry artefacts the detector never saw in
+    training (and so misreads as onsets at high confidence): gap-fill zeros, stuck/flat runs, clipping,
+    or an isolated glitch spike. Real ground motion passes; only artefact windows are skipped."""
+    if len(w) < NPTS:
+        return False
+    if np.mean(w == 0.0) > 0.05:                      # gap-fill: real data is ~never exactly 0 for long
+        return False
+    if _max_run(w) > 50:                              # > 0.5 s of a constant value = stuck/filled sensor
+        return False
+    amax = float(np.max(np.abs(w)))
+    if amax == 0.0 or np.mean(np.abs(w) >= 0.999 * amax) > 0.01:   # clipping: many samples at the rail
+        return False
+    med = np.median(w)
+    mad = np.median(np.abs(w - med)) + 1e-9
+    z = np.abs(w - med) / (1.4826 * mad)              # robust z-scores
+    if z.max() > 30.0 and int(np.sum(z > 10.0)) < 3:  # one huge lone outlier = glitch, not a real onset
+        return False
+    return True
+
+
 def declare_graded(triggers, now, confirm_stations, coords):
     """Graded declaration over triggers within COINC_WIN. Returns (station_indices, strongest_idx,
     confirmed) or None:
-      - >= confirm_stations distinct stations AND a physically consistent move-out -> confirmed=True
-      - exactly one station, at prob >= LONE_THRESH                                -> confirmed=False
-      - anything else (scattered multi-station noise, or a weak lone trigger)      -> None
+      - >= confirm_stations stations that CLUSTER near the strongest (<= COHERENCE_KM) AND a physically
+        consistent move-out                                                          -> confirmed=True
+      - exactly one station, at prob >= LONE_THRESH                                  -> confirmed=False
+      - anything else (scattered/far-apart noise, or a weak lone trigger)            -> None
     `triggers` is a deque of (time, sta_idx, prob)."""
     recent = [t for t in triggers if now - t[0] <= COINC_WIN]
     by_sta = {}                       # sta_idx -> best detection prob
@@ -165,10 +203,14 @@ def declare_graded(triggers, now, confirm_stations, coords):
     if not by_sta:
         return None
     strongest = max(by_sta, key=by_sta.get)
-    if len(by_sta) >= confirm_stations and moveout_ok(first, coords):
-        return sorted(by_sta), strongest, True
+    # geographic coherence: keep only triggering stations clustered near the strongest one, so two
+    # stations glitching far apart in the same window can't spuriously "confirm" each other.
+    slat, slon = coords[strongest][0], coords[strongest][1]
+    near = [si for si in by_sta if haversine_km(slat, slon, coords[si][0], coords[si][1]) <= COHERENCE_KM]
+    if len(near) >= confirm_stations and moveout_ok({si: first[si] for si in near}, coords):
+        return sorted(near), strongest, True
     if len(by_sta) == 1 and by_sta[strongest] >= LONE_THRESH:
-        return sorted(by_sta), strongest, False
+        return [strongest], strongest, False
     return None
 
 
@@ -273,6 +315,8 @@ def run_live(args):
                 if tr.stats.npts < NPTS:
                     continue
                 w = tr.data[-NPTS:].astype(np.float32)
+                if not clean_window(w):
+                    continue                          # skip gap-fill / stuck / clipped / spike windows
                 p = detect_prob(det, w)
                 if p >= args.det_thresh:
                     triggers.append((now, idx_of[n], p))
@@ -287,9 +331,11 @@ def run_live(args):
                 mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
                     if (confirmed and mag_models) else None
                 event_names = [names[i] for i in stas]
-                # reload device tokens each event so mobile users who just signed up are covered
+                # PUSH only CONFIRMED events; tentative (lone-station) declarations are logged, not pushed.
+                # reload device tokens each event so mobile users who just signed up are covered.
                 psent = alert_push_devices(push_fcm.load_tokens(), event_names, names[strongest],
-                                           coord_of, mag, len(stas), confirmed, args.dry_run)
+                                           coord_of, mag, len(stas), confirmed, args.dry_run) \
+                    if confirmed else 0
                 log_event(names, coords, stas, strongest, mag, conf, psent, confirmed)
                 tag = "EVENT" if confirmed else "TENTATIVE"
                 msize = f"M{mag:.1f}" if mag is not None else ("size n/a" if confirmed else "unconfirmed")
