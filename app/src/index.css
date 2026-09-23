@@ -169,6 +169,9 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .station-dist { font-family: var(--font-mono); font-size: 13px; color: var(--mute); }
 .station-toggle { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
 .station-row.on .station-dist, .station-row.on .station-toggle { color: color-mix(in srgb, #fff 72%, transparent); }
+/* Live subscription: greyed-out (still tappable to drop it and swap in another). */
+.station-row.subscribed { background: #f0f0f0; color: var(--body); border-color: #d4d4d4; }
+.station-row.subscribed .station-dist, .station-row.subscribed .station-toggle { color: var(--body); }
 .actions { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .btn { font-family: var(--body-font); font-size: 14px; font-weight: 500; color: #fff; background: var(--ink); border: 1px solid var(--ink); border-radius: 9999px; padding: 10px 22px; cursor: pointer; }
 .btn:disabled { opacity: 0.5; cursor: default; }

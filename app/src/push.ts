@@ -8,6 +8,8 @@ import { registerPushToken, unregisterPushToken } from './nearme'
 
 const SUBSCRIBED_KEY = 'seismic.push.subscribed'
 const TOKEN_KEY = 'seismic.push.token'
+const STATIONS_KEY = 'seismic.push.stations'
+const NAME_KEY = 'seismic.push.name'
 
 export function isNativeApp() {
   return Capacitor.isNativePlatform()
@@ -19,6 +21,27 @@ export function isSubscribed(): boolean {
     return localStorage.getItem(SUBSCRIBED_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+// The sensor codes this device is currently subscribed to, persisted locally so the selection
+// survives an app restart (the server has no per-device read endpoint). Empty if not subscribed.
+export function subscribedStations(): string[] {
+  try {
+    const raw = localStorage.getItem(STATIONS_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter((s): s is string => typeof s === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+// The name last used to subscribe, so the form can prefill it when re-opening or updating.
+export function subscribedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? ''
+  } catch {
+    return ''
   }
 }
 
@@ -53,6 +76,8 @@ export async function enablePush(sub: { name: string; stations: string[] }): Pro
   try {
     localStorage.setItem(SUBSCRIBED_KEY, '1')
     localStorage.setItem(TOKEN_KEY, token)
+    localStorage.setItem(STATIONS_KEY, JSON.stringify(sub.stations))
+    localStorage.setItem(NAME_KEY, sub.name)
   } catch {
     // storage unavailable — state just won't persist across restarts
   }
@@ -73,6 +98,8 @@ export async function disablePush(): Promise<void> {
   try {
     localStorage.removeItem(SUBSCRIBED_KEY)
     localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(STATIONS_KEY)
+    localStorage.removeItem(NAME_KEY)
   } catch {
     // ignore
   }

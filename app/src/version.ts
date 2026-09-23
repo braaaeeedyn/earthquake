@@ -3,7 +3,7 @@
 //   MAJOR = big release, MINOR = feature update, PATCH = quality-of-life (optional).
 // The server publishes { latest, min }. If the installed app is behind `min` on MAJOR or MINOR,
 // the app blocks and sends the user to the download page; a PATCH gap is only a soft notice.
-export const APP_VERSION = '1.00.00'
+export const APP_VERSION = '1.01.00'
 
 type Ver = [number, number, number]
 

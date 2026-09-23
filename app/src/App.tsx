@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
 import { caTop, geocode, getAppVersion, getStations, liveStatus, sendContact, type Station, type UsgsEvent, type CaWindow } from './nearme'
-import { enablePush, disablePush, initPush, isNativeApp, isSubscribed } from './push'
+import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, subscribedName } from './push'
 import { getMyLocation } from './geo'
 import { APP_VERSION, mustUpdate, updateAvailable } from './version'
 
@@ -795,18 +795,29 @@ function kmBetween(aLat: number, aLon: number, bLat: number, bLon: number) {
   return 2 * R * Math.asin(Math.sqrt(s))
 }
 
+// Are two sets of station codes identical? Used to tell a live subscription from a pending edit.
+function sameSet(a: Set<string>, b: Set<string>) {
+  return a.size === b.size && [...a].every((x) => b.has(x))
+}
+
 function NearMe() {
-  const [name, setName] = useState('')
+  // Restore the persisted subscription so the choice survives closing the app: the stations the
+  // device is subscribed to are shown pre-selected (and locked-in), not blank.
+  const savedSubs = subscribedStations()
+  const [name, setName] = useState(subscribedName())
   const [stations, setStations] = useState<Station[]>([])
   const [dist, setDist] = useState<Record<string, number>>({})   // code -> km, empty until located
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<Set<string>>(new Set(savedSubs))
+  const [subscribedSet, setSubscribedSet] = useState<Set<string>>(new Set(savedSubs)) // live server subscription
   const [located, setLocated] = useState(false)
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
-  const [subscribed, setSubscribed] = useState(isSubscribed())
   const [city, setCity] = useState('')
   const [stateName, setStateName] = useState('CA')
   const [searching, setSearching] = useState(false)
+
+  const subscribed = subscribedSet.size > 0                    // subscribed iff we track live stations
+  const dirty = !sameSet(selected, subscribedSet)              // selection differs from what's live
 
   useEffect(() => {
     getStations()
@@ -872,17 +883,25 @@ function NearMe() {
       setMsg({ kind: 'err', text: 'Pick at least one sensor to be alerted for.' })
       return
     }
+    const wasSubscribed = subscribed
     setBusy(true)
     setMsg(null)
     try {
+      // register-push upserts by device token, so the same call both subscribes and swaps the set.
       const pushed = await enablePush({ name, stations: [...selected] })
       if (pushed === null) {
         // web build: no native push, so there's nothing to subscribe to here
         setMsg({ kind: 'err', text: 'Alerts arrive as push notifications - install the SeismicSoCal app to subscribe.' })
         return
       }
-      setSubscribed(true)
-      setMsg({ kind: 'ok', text: `Subscribed to ${selected.size} sensor${selected.size > 1 ? 's' : ''} - push alerts are enabled on this device.` })
+      setSubscribedSet(new Set(selected))
+      const n = selected.size
+      setMsg({
+        kind: 'ok',
+        text: wasSubscribed
+          ? `Updated - now alerting on ${n} sensor${n > 1 ? 's' : ''}.`
+          : `Subscribed to ${n} sensor${n > 1 ? 's' : ''} - push alerts are enabled on this device.`,
+      })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t subscribe: ${(err as Error).message}.` })
     } finally {
@@ -895,7 +914,7 @@ function NearMe() {
     setMsg(null)
     try {
       await disablePush()
-      setSubscribed(false)
+      setSubscribedSet(new Set())      // no live subscription; selection is kept for easy re-subscribe
       setMsg({ kind: 'ok', text: 'Unsubscribed - this device will no longer receive alerts.' })
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t unsubscribe: ${(err as Error).message}.` })
@@ -974,12 +993,16 @@ function NearMe() {
             <ul className="station-list">
               {rows.map((s) => {
                 const on = selected.has(s.code)
+                const live = subscribedSet.has(s.code)   // currently subscribed on the server
                 const km = dist[s.code]
+                // Live subscription -> greyed "Subscribed"; a fresh pick -> black "Selected"; else off.
+                const cls = live && on ? ' subscribed' : on ? ' on' : ''
+                const label = live && on ? 'Subscribed' : on ? 'Selected' : 'Off'
                 return (
                   <li key={s.code}>
                     <button
                       type="button"
-                      className={`station-row${on ? ' on' : ''}`}
+                      className={`station-row${cls}`}
                       aria-pressed={on}
                       onClick={() => toggle(s.code)}
                     >
@@ -987,7 +1010,7 @@ function NearMe() {
                       <span className="station-dist">
                         {located && km !== undefined ? `${Math.round(km)} km` : '—'}
                       </span>
-                      <span className="station-toggle">{on ? 'Subscribed' : 'Off'}</span>
+                      <span className="station-toggle">{label}</span>
                     </button>
                   </li>
                 )
@@ -996,21 +1019,33 @@ function NearMe() {
           </fieldset>
 
           <div className="actions">
-            {isNativeApp() ? (
-              subscribed ? (
-                <button type="button" className="btn" onClick={unsubscribe} disabled={busy}>
-                  {busy ? 'Unsubscribing…' : 'Unsubscribe all'}
-                </button>
-              ) : (
-                <button type="submit" className="btn" disabled={busy || !selected.size}>
-                  {busy ? 'Subscribing…' : `Subscribe${selected.size ? ` (${selected.size})` : ''}`}
-                </button>
-              )
-            ) : (
+            {!isNativeApp() ? (
               // Web has no push channel - subscription lives in the app only.
               <button type="button" className="btn btn-struck" disabled aria-disabled="true">
                 Subscribe
               </button>
+            ) : !subscribed ? (
+              // Not subscribed: pick stations, then Subscribe.
+              <button type="submit" className="btn" disabled={busy || !selected.size}>
+                {busy ? 'Subscribing…' : `Subscribe${selected.size ? ` (${selected.size})` : ''}`}
+              </button>
+            ) : (
+              // Subscribed: Unsubscribe all, plus Update to commit a changed selection (swap sensors).
+              <>
+                {dirty && selected.size > 0 && (
+                  <button type="submit" className="btn" disabled={busy}>
+                    {busy ? 'Updating…' : `Update (${selected.size})`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={dirty && selected.size > 0 ? 'btn-outline' : 'btn'}
+                  onClick={unsubscribe}
+                  disabled={busy}
+                >
+                  {busy ? 'Unsubscribing…' : 'Unsubscribe all'}
+                </button>
+              </>
             )}
           </div>
           {!isNativeApp() && (

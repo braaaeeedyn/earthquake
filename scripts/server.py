@@ -51,8 +51,8 @@ NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
 # App version gate. `LATEST` = newest released app; `MIN` = lowest version allowed to run. The
 # installed app compares itself: behind MIN on MAJOR or MINOR -> blocked (must re-download); a PATCH
 # gap is only a soft notice. Bump LATEST every release; bump MIN (major/minor) to FORCE an update.
-APP_LATEST_VERSION = "1.00.00"
-APP_MIN_VERSION = "1.00.00"
+APP_LATEST_VERSION = "1.01.00"
+APP_MIN_VERSION = "1.01.00"
 NET_RADIUS_KM = 150.0        # a quake within this of any station is "in model range"
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
