@@ -38,12 +38,12 @@ def haversine_km(lat1, lon1, lat2, lon2):
         + math.cos(r(lat1)) * math.cos(r(lat2)) * math.sin(r(lon2 - lon1) / 2) ** 2))
 
 
-def load_events(since_epoch):
+def load_events(since_epoch, log_path=EVENTS_LOG):
     """Declared events from the JSONL log, on/after since_epoch, oldest first."""
-    if not EVENTS_LOG.exists():
+    if not log_path.exists():
         return []
     evs = []
-    for line in EVENTS_LOG.read_text(encoding="utf-8").splitlines():
+    for line in log_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -116,6 +116,8 @@ def match_real_for_declared(ev, time_tol, dist_tol):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--log", type=Path, default=EVENTS_LOG,
+                    help=f"declared-event JSONL to score (default {EVENTS_LOG})")
     ap.add_argument("--since", help="ISO date/time (UTC); default = first logged event")
     ap.add_argument("--mag-floor", type=float, default=3.0, dest="mag_floor",
                     help="min magnitude counted as detectable for the recall denominator (default 3.0)")
@@ -130,9 +132,9 @@ def main():
     now_epoch = datetime.now(timezone.utc).timestamp()
     since_epoch = (datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc).timestamp()
                    if args.since else 0.0)
-    events = load_events(since_epoch)
+    events = load_events(since_epoch, args.log)
     if not events:
-        print(f"No declared events in {EVENTS_LOG}"
+        print(f"No declared events in {args.log}"
               + (f" since {args.since}" if args.since else "")
               + ".\n(The watcher writes this log on every declared event; none yet or wrong window.)")
         return
@@ -167,6 +169,23 @@ def main():
         tag = f"REAL M{m['mag']:.1f} {m['place']} (dt={m['dt']:+.0f}s)" if m else "FALSE ALARM (no USGS match)"
         size = f"M{ev['mag']:.1f}" if ev.get("mag") is not None else "size n/a"
         print(f"    {ev['t']}  {ev['n_stations']}st near {ev['proxy_station']} {size}  -> {tag}")
+
+    # ---- breakdown by declaration tier (the live log carries 'confirmed' / 'pushed'; the old
+    #      schema does not, so only print this where the fields exist) ----
+    if any("confirmed" in d["declared"] for d in declared):
+        def tier_line(label, subset):
+            n = len(subset)
+            t = sum(s["true"] for s in subset)
+            prec = f"precision {t / n:.2f}" if n else "precision n/a"
+            print(f"  {label}: {n}   true {t}   false {n - t}   {prec}")
+        print()
+        tier_line("CONFIRMED (push-eligible)", [d for d in declared if d["declared"].get("confirmed")])
+        tier_line("TENTATIVE (lone, logged only)", [d for d in declared if not d["declared"].get("confirmed")])
+        pushed = [d for d in declared if d["declared"].get("pushed")]
+        if pushed:
+            tp = sum(d["true"] for d in pushed)
+            print(f"  PUSHED to devices: {len(pushed)}   of which real quakes: {tp}"
+                  f"   false pushes: {len(pushed) - tp}")
 
     print(f"\nREAL quakes >= M{args.mag_floor} within {args.radius:.0f}km: {len(reals)}"
           f"   caught: {len(caught)}   missed: {len(missed)}")
