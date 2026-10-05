@@ -460,8 +460,10 @@ No location is stored.
 - **Host:** an Oracle Cloud Always-Free A1 VM, `/opt/seismicsocal`, with its own Python venv.
 - **`seismicsocal.service`** (systemd) runs `server.py`, which starts and supervises `live_watch.py`.
   It loads `.env` (SMTP credentials and `PUSH_ENABLED`).
-- **`seismicsocal-crosscheck.timer`** runs `crosscheck_events.py` nightly. It scores the live log
-  against USGS, with the chance baseline.
+- **`crosscheck_events.py`** scores the live log against USGS, with the chance baseline. It is run by
+  hand on the VM. A nightly systemd timer for it is provided in `deploy/seismicsocal-crosscheck.{service,timer}`
+  but is not installed; to install it, copy both files to `/etc/systemd/system/` and run
+  `sudo systemctl enable --now seismicsocal-crosscheck.timer`.
 - **Caddy** provides HTTPS (Let's Encrypt), serves `app/dist`, and proxies `/api/*` to `127.0.0.1:8000`.
 - **What ships:**
   - the code (from git);
