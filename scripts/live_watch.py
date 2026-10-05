@@ -51,7 +51,9 @@ EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"   # durable audit log 
 
 SR = 100.0
 NPTS = 3000                       # 30 s @ 100 Hz
-SCALE = 6.954687e-4               # training amplitude scale = X[mask].std() over phase2a_xl (m/s)
+SCALE = 7.773395e-4               # training amplitude scale = X[mask].std() over phase2a_xl (m/s);
+                                  # must equal prep()'s scale in seismic_train_multi for the deployed
+                                  # magnitude_ensemble.pt (verified: its am/asd match this npz exactly)
 NET = "CI"
 
 # Tunables (also CLI flags)
@@ -59,6 +61,9 @@ DET_THRESH = 0.60                 # per-station detection probability to count a
 MIN_STATIONS = 2                  # CONFIRM tier: stations that must agree for a corroborated event
 LONE_THRESH = 0.85                # a SINGLE station alerts (tentative) only above this higher floor,
                                   # so lone triggers catch small quakes without pushing on plain noise
+ALERT_MIN_MAG = 3.0               # felt-shaking floor: push a CONFIRMED event only if the model sizes
+                                  # it >= this. The magnitude net is trained on M>=3.5, so sub-floor
+                                  # estimates are unreliable AND too small to be felt -- log, don't push.
 COINC_WIN = 12.0                  # seconds within which triggers count toward the same event
 COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event (keyed per station)
 V_MIN = 2.0                       # km/s: slowest wave used to bound plausible inter-station move-out
@@ -214,6 +219,12 @@ def declare_graded(triggers, now, confirm_stations, coords):
     return None
 
 
+def push_eligible(confirmed, mag, min_mag):
+    """A declaration is pushed only if it is CONFIRMED and the model sized it at/above the felt floor.
+    Unsized (mag is None) or sub-floor events are logged but not pushed (see ALERT_MIN_MAG)."""
+    return bool(confirmed and mag is not None and mag >= min_mag)
+
+
 def log_event(names, coords, stas, strongest, mag, conf, pushed, confirmed):
     """Append one declared event to the JSONL audit log (durable, flushed -- independent of stdout
     buffering) so scripts/crosscheck_events.py can later score it against the USGS catalog."""
@@ -331,11 +342,15 @@ def run_live(args):
                 mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
                     if (confirmed and mag_models) else None
                 event_names = [names[i] for i in stas]
-                # PUSH only CONFIRMED events; tentative (lone-station) declarations are logged, not pushed.
-                # reload device tokens each event so mobile users who just signed up are covered.
+                # PUSH only a CONFIRMED event the model sizes at/above the felt-shaking floor. Smaller
+                # quakes -- and events we could not size (mag is None) -- are still logged (confirmed=True)
+                # but not pushed: sub-floor magnitudes are below perception and outside the net's trained
+                # range. Tentative (lone-station) declarations are never pushed. Reload tokens each event
+                # so users who just signed up are covered.
+                push_ok = push_eligible(confirmed, mag, args.min_mag)
                 psent = alert_push_devices(push_fcm.load_tokens(), event_names, names[strongest],
                                            coord_of, mag, len(stas), confirmed, args.dry_run) \
-                    if confirmed else 0
+                    if push_ok else 0
                 log_event(names, coords, stas, strongest, mag, conf, psent, confirmed)
                 tag = "EVENT" if confirmed else "TENTATIVE"
                 msize = f"M{mag:.1f}" if mag is not None else ("size n/a" if confirmed else "unconfirmed")
@@ -452,6 +467,13 @@ def selftest(args):
     # A weak lone station must NOT alert.
     assert declare_graded(deque([(now, 0, 0.7)]), now, args.min_stations, coords) is None, \
         "a weak lone station should not declare"
+
+    # Felt-shaking floor: a confirmed event is pushed only when sized at/above args.min_mag.
+    assert push_eligible(True, args.min_mag + 0.1, args.min_mag), "confirmed, above floor -> push"
+    assert not push_eligible(True, args.min_mag - 0.1, args.min_mag), "confirmed, below floor -> no push"
+    assert not push_eligible(True, None, args.min_mag), "confirmed but unsized -> no push"
+    assert not push_eligible(False, 9.0, args.min_mag), "tentative -> never pushed"
+    print(f"[selftest] push floor: only confirmed events >= M{args.min_mag:g} are pushed")
     print("[selftest] weak lone trigger correctly suppressed")
 
 
@@ -461,6 +483,8 @@ def main():
     ap.add_argument("--min-stations", type=int, default=MIN_STATIONS, dest="min_stations",
                     help="stations that must agree to CONFIRM an event (fewer => a tentative alert)")
     ap.add_argument("--det-thresh", type=float, default=DET_THRESH, dest="det_thresh")
+    ap.add_argument("--min-mag", type=float, default=ALERT_MIN_MAG, dest="min_mag",
+                    help="push a confirmed event only if its estimated magnitude is >= this (felt floor)")
     ap.add_argument("--scan", type=float, default=2.0, help="seconds between detection scans")
     ap.add_argument("--dry-run", action="store_true", help="print instead of pushing")
     ap.add_argument("--selftest", action="store_true")

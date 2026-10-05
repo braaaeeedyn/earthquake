@@ -104,7 +104,8 @@ Current numbers — **2000–2025 dataset**, 5-seed ensembles on a **chronologic
   No dark theme or toggle. Off-palette color is flagged by the impeccable design hook.
 - **Live magnitude SCALE:** `live_watch.py` normalises waveforms by a hardcoded `SCALE` = the training
   set's `X[mask].std()`. If you rebuild the magnitude dataset, **update `SCALE`** to match or live
-  magnitudes are biased (last set to `6.954687e-4` for the 2000–2025 data).
+  magnitudes are biased (currently `7.773395e-4` = `X[mask].std()` of `seismic_phase2a_xl.npz`, verified
+  against the deployed `magnitude_ensemble.pt` — its stored `am`/`asd` match that npz exactly).
 
 ### How it fits together (Frontend / Online / Offline)
 - **OFFLINE (training).** `seismic_build*.py` fetch SCEDC waveforms (labeled against the USGS catalog via
@@ -130,6 +131,12 @@ Current numbers — **2000–2025 dataset**, 5-seed ensembles on a **chronologic
   a lone station at prob ≥ `LONE_THRESH=0.85` → **TENTATIVE** (labelled a possible false alarm); weak lone
   triggers suppressed. Cooldown is per-strongest-station. `events.jsonl` logs each declaration (with a
   `confirmed` flag) for `crosscheck_events.py`.
+- **Felt-shaking push floor (`ALERT_MIN_MAG`, default M3.0; `--min-mag`):** a CONFIRMED event is PUSHED
+  only if the magnitude model sizes it **≥ the floor**; smaller or unsized events are still logged
+  (`confirmed=True`) but not pushed. The magnitude net is trained on **M≥3.5**, so sub-floor estimates are
+  both unreliable and below perception. NOTE: the net currently *under-reads* live (real M3+ read ~M2.5),
+  so the floor needs recalibration against the VM `events.jsonl` before it is trusted to not suppress real
+  events — see Open TODOs.
 - **One combined push per device**, personalised by distance from the epicenter-proxy (strongest station)
   to the user's nearest subscribed station; `shaking_model` gives the intensity string. `shaking_model` is
   on the MESSAGE path (wording), NOT the alert DECISION (which is station membership + coincidence tier).
@@ -164,6 +171,13 @@ in `data/processed/push_tokens.json` **on the VM**. Update procedure = ship code
 build`, `sudo systemctl restart seismicsocal` (details in `DEPLOY.md`).
 
 ### Open TODOs
+- **Live magnitude under-reads + calibrate the push floor.** Fixed `SCALE` (was `6.954687e-4`, a ~12%
+  under-normalization vs the checkpoint's training `X[mask].std()`), but cross-checking the VM
+  `events.jsonl` showed real M3+ events sized at ~M2.5 live — the net reads far below training range on
+  the live stream (OOD: it's trained on M≥3.5; also the distance proxy is the strongest *station*, not the
+  true epicentre, so the per-station `dist`/`logdist` aux features differ from training). Diagnose with
+  `--replay` on an env where torch+obspy+scipy load, then set `ALERT_MIN_MAG` from the post-fix mags of
+  the confirmed events that matched real USGS quakes vs. the false ones.
 - **"Replay a real earthquake" mode** — pick a historical CA event → walk it Detect → Size → Warn, showing
   the alert fire + lead time. Self-contained, high demonstration payoff.
 - **Seed-averaged magnitude R² with a CI** — a 5-variant fine-tune search (augment / cosine LR / Huber /
