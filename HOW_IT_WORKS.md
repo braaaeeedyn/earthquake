@@ -460,10 +460,11 @@ No location is stored.
 - **Host:** an Oracle Cloud Always-Free A1 VM, `/opt/seismicsocal`, with its own Python venv.
 - **`seismicsocal.service`** (systemd) runs `server.py`, which starts and supervises `live_watch.py`.
   It loads `.env` (SMTP credentials and `PUSH_ENABLED`).
-- **`crosscheck_events.py`** scores the live log against USGS, with the chance baseline. It is run by
-  hand on the VM. A nightly systemd timer for it is provided in `deploy/seismicsocal-crosscheck.{service,timer}`
-  but is not installed; to install it, copy both files to `/etc/systemd/system/` and run
-  `sudo systemctl enable --now seismicsocal-crosscheck.timer`.
+- **`seismicsocal-crosscheck.timer`** (installed) runs `crosscheck_events.py` every night at 09:00 UTC
+  (02:00 Pacific), after the previous day's USGS catalogue has settled. It scores the whole live log
+  since go-live and writes `data/processed/crosscheck_report.json`, split into **confirmed** (can
+  alert), **pushed** and **tentative** (logged only), each with a +1 h chance baseline. Each USGS quake in
+  the "Biggest quakes" list is also checked live, at request time (§7).
 - **Caddy** provides HTTPS (Let's Encrypt), serves `app/dist`, and proxies `/api/*` to `127.0.0.1:8000`.
 - **What ships:**
   - the code (from git);

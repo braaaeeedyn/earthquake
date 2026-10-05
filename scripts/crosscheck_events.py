@@ -31,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+LIVE_SINCE = 1791191580.0       # 2026-10-05 09:13 UTC: the live 19-station pipeline (v2) started logging
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -152,7 +153,9 @@ def main():
               + ".\n(The watcher writes this log on every declared event; none yet or wrong window.)")
         return
     if not args.since:
-        since_epoch = events[0]["epoch"]
+        # measure from when the live system started logging (status file / first event), not from the
+        # first declaration -- otherwise a quiet first hour inflates every per-day rate
+        since_epoch = min(events[0]["epoch"], LIVE_SINCE) if LIVE_SINCE else events[0]["epoch"]
 
     # ---- precision: are the declared events real? ----
     declared = []
@@ -212,9 +215,22 @@ def main():
         print(f"    MISSED  M{q['mag']:.1f}  {q['place']}  {iso(q['epoch'])}")
 
     if args.json:
+        def tier(subset):
+            n = len(subset)
+            t = sum(d["true"] for d in subset)
+            return {"count": n, "real": t, "false": n - t,
+                    "precision": t / n if n else None,
+                    "chance_baseline": sum(d["chance"] for d in subset) / n if n else None,
+                    "false_per_day": (n - t) / span_days if span_days else None}
+        conf = [d for d in declared if d["declared"].get("confirmed")]
         Path(args.json).write_text(json.dumps({
             "since": iso(since_epoch), "until": iso(now_epoch), "span_days": span_days,
-            "tolerances": {"time_s": args.time_tol, "dist_km": args.dist_tol},
+            "tolerances": {"time_s": args.time_tol, "dist_km": args.dist_tol, "match_mag": args.match_mag},
+            # CONFIRMED (>= 3 stations) are the only declarations that can alert; PUSHED actually did;
+            # TENTATIVE (1-2 stations) are logged only and never push.
+            "confirmed": tier(conf),
+            "pushed": tier([d for d in declared if d["declared"].get("pushed")]),
+            "tentative": tier([d for d in declared if not d["declared"].get("confirmed")]),
             "declared": declared,
             "precision": (n_true / len(declared)) if declared else None,
             "false_alarms_per_day": n_false / span_days if span_days else None,
