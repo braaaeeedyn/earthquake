@@ -35,7 +35,7 @@ export interface Station {
   lon: number
 }
 
-// The fixed 10-station network. Used to show the user their distance to each station so they can
+// The live station network (src/eq/network.py). Used to show the user their distance to each station so they can
 // choose which ones to subscribe to.
 export async function getStations(): Promise<Station[]> {
   const res = await fetch(api('/api/stations'))

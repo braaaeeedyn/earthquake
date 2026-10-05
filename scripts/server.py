@@ -14,6 +14,7 @@ import smtplib
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -23,9 +24,11 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "src"))
 import quake_archive  # noqa: E402
 import push_fcm  # noqa: E402
 from nearme_watch import fetch_usgs, haversine_km  # noqa: E402  (import also loads .env into os.environ)
+from eq import network  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8000"))
 # Bind address. Default 127.0.0.1 (safe: reach it through a reverse proxy that terminates TLS).
@@ -36,16 +39,11 @@ HOST = os.environ.get("HOST", "127.0.0.1")
 SUPPORT_TO = "braedynthompson@berkeley.edu"
 # Southern California only (the trained network's region): lat_min, lat_max, lon_min, lon_max
 CA_BOUNDS = (32.0, 36.4, -121.5, -114.0)
-# The 10 trained CI/SCEDC stations (codes + coords from seismic_phase2a_xl.npz — the set the models
-# learned on). A device subscribes to the stations nearest it; the live watcher pushes it when one of
-# those stations fires. This is also the region the "biggest SoCal quakes" browser is limited to.
-STATIONS = [
-    {"code": "CCC", "lat": 35.5249, "lon": -117.3645}, {"code": "CLC", "lat": 35.8157, "lon": -117.5975},
-    {"code": "TOW2", "lat": 35.8086, "lon": -117.7649}, {"code": "WBM", "lat": 35.6084, "lon": -117.8905},
-    {"code": "PASC", "lat": 34.1714, "lon": -118.1852}, {"code": "SVD", "lat": 34.1065, "lon": -117.0982},
-    {"code": "RIO", "lat": 34.1047, "lon": -117.9796}, {"code": "MWC", "lat": 34.2236, "lon": -118.0583},
-    {"code": "DGR", "lat": 33.6500, "lon": -117.0095}, {"code": "BAK", "lat": 35.3444, "lon": -119.1044},
-]
+# The live station network (src/eq/network.py -- the single source of truth shared with the daemon,
+# the dataset builder and the scorer). A device subscribes to the stations nearest it; the live
+# watcher pushes it when a located event is within reach of one of them. This is also the region the
+# "biggest SoCal quakes" browser is limited to.
+STATIONS = network.as_api()
 STATION_CODES = {s["code"] for s in STATIONS}
 NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
 # App version gate. `LATEST` = newest released app; `MIN` = lowest version allowed to run. The
@@ -223,8 +221,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(502, {"error": str(e)})
         elif path == "/api/status":
-            # the live SeedLink watcher is running -> the stream is live (it exits if the stream drops)
-            self._send(200, {"live": WATCHER is not None and WATCHER.poll() is None})
+            # the live SeedLink watcher is running -> the stream is live (it exits if the stream drops);
+            # per-station health (up / latency) comes from the daemon's status file (refreshed every 30 s)
+            out = {"live": WATCHER is not None and WATCHER.poll() is None}
+            try:
+                st = json.loads((ROOT / "data" / "processed" / "live_status.json").read_text())
+                if time.time() - st.get("t", 0) < 120:
+                    out["stations"], out["push_enabled"] = st["stations"], st.get("push_enabled")
+            except (OSError, ValueError):
+                pass
+            self._send(200, out)
         else:
             self._send(404, {"error": "not found"})
 

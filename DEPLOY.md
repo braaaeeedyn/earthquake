@@ -64,10 +64,20 @@ rsync -av --exclude node_modules --exclude .venv --exclude app/android \
 
 # gitignored data + secrets the server/daemon need (not carried by git)
 scp data/processed/detector.pt data/processed/magnitude_ensemble.pt \
-    data/processed/shaking_calibration.json data/processed/seismic_phase2a_xl.npz \
-    ubuntu@HOST_IP:/opt/seismicsocal/data/processed/
+    data/processed/shaking_calibration.json ubuntu@HOST_IP:/opt/seismicsocal/data/processed/
+ssh ubuntu@HOST_IP mkdir -p /opt/seismicsocal/data/processed/v2
+scp data/processed/v2/pipeline_config.json data/processed/v2/tt_correction.json \
+    ubuntu@HOST_IP:/opt/seismicsocal/data/processed/v2/
 scp fcm-service-account.json .env ubuntu@HOST_IP:/opt/seismicsocal/
+
+# VERIFY the VM runs exactly the models you trained (a mismatch here is how the VM once ran
+# months-old models while the site advertised new ones):
+sha256sum data/processed/detector.pt data/processed/magnitude_ensemble.pt
+ssh ubuntu@HOST_IP 'cd /opt/seismicsocal && sha256sum data/processed/detector.pt data/processed/magnitude_ensemble.pt'
 ```
+
+The checkpoints carry their station list, threshold and amplitude scale; the daemon refuses to start
+if a checkpoint's stations differ from `src/eq/network.py`, so models and code must ship together.
 
 ## 5. Install runtime + build the site (on the VM)
 
@@ -82,8 +92,8 @@ pip install torch numpy scipy scikit-learn matplotlib obspy google-auth requests
 #   If obspy fails to build on ARM, install miniforge and `conda install -c conda-forge obspy`.
 
 # sanity: the models + gate load and the pipeline runs offline
-python scripts/live_watch.py --replay        # detection + magnitude on cached events
-python scripts/calibrate_shaking.py          # confirms the alert gate loads (reprints the table)
+python scripts/live_watch.py --selftest      # location, 3-station rule, push floor, targeting
+python -c "import sys; sys.path[:0]=['scripts','src']; import live_watch; live_watch.load_detector(); from eq.pipeline import MagnitudeEnsemble; from eq import network; MagnitudeEnsemble(live_watch.MAG_CKPT, network.CODES, network.COORDS); print('models OK')"
 
 # build the web app (the site). Web build needs no VITE_API_BASE (it calls /api relatively).
 cd app && npm ci && npm run build && cd ..
@@ -97,7 +107,7 @@ sudo cp deploy/seismicsocal.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now seismicsocal
 systemctl status seismicsocal            # should be active (running)
-curl -s localhost:8000/api/status        # {"live": true} once SeedLink connects
+curl -s localhost:8000/api/status        # {"live": true, "stations": {...}} once SeedLink connects
 
 # HTTPS + static site + /api proxy
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
@@ -125,16 +135,33 @@ or re-run step 5's build after copying it). Users download it from the site's `/
 - **Contact form:** send a message → it arrives in the support inbox (needs SMTP creds in `.env`).
 - **Push:** install the rebuilt APK on a real phone, subscribe, and confirm the FCM token is
   stored: `python scripts/push_fcm.py --selftest` on the VM should report `stored device tokens: 1`.
-- **Alert path:** `python scripts/live_watch.py --selftest` (dry-run) declares an event and would
-  push. For a true live check, let the service run and watch `journalctl -u seismicsocal -f` for
-  `[EVENT]` lines when a real SoCal quake occurs.
+- **Alert path:** `python scripts/live_watch.py --selftest` checks location, the 3-station rule, the
+  push floor and targeting. For a true live check, let the service run and watch
+  `journalctl -u seismicsocal -f` for `[EVENT]` lines when a real SoCal quake occurs.
+
+## Shadow mode, then pushes
+
+Pushes are OFF unless `PUSH_ENABLED=1` is in `/opt/seismicsocal/.env` (the unit loads it). After any
+model or pipeline change, run in **shadow mode** (pushes off) for at least 7 days, then score it:
+
+```bash
+python scripts/crosscheck_events.py --since <shadow start date>   # precision vs a +1 h chance baseline
+```
+
+Turn pushes on only if the live scorecard matches what the offline replay harness predicted
+(`scripts/replay_archive.py`, see README). When the station network changes, migrate subscriptions
+first: `python scripts/migrate_subscriptions.py` (dry run) then `--apply` (keeps a backup).
 
 ## Operating it
 
 - **Logs:** `journalctl -u seismicsocal -f` (backend + daemon), `journalctl -u caddy -f` (web).
 - **Restart:** `sudo systemctl restart seismicsocal`. It restarts automatically on crash, and the
   daemon is auto-respawned by the backend if its SeedLink stream drops.
-- **Update:** rsync the new code, `sudo systemctl restart seismicsocal`, and rebuild the site
+- **Update:** rsync the new code (plus the checkpoints and `data/processed/v2/*.json` if retrained,
+  verifying the sha256), `sudo systemctl restart seismicsocal`, and rebuild the site
   (`cd app && npm run build`).
+- **Station health:** `curl -s localhost:8000/api/status` lists each station's up/latency. A station
+  can drop off the public SeedLink relay (SCZ2 did during selection); the pipeline works with those
+  that stream.
 - **Security:** after launch, rotate the Gmail app password (regenerate in Google, update `.env`,
   restart). Keep `.env` and `fcm-service-account.json` readable only by `ubuntu` (`chmod 600`).

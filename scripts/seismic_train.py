@@ -57,6 +57,19 @@ class SeisModel(nn.Module):
         return self.det(e).squeeze(-1), self.mag(torch.cat([e, aux], -1)).squeeze(-1)
 
 
+class DetectorNet(nn.Module):
+    """v2 detector: the same CNN -> Transformer backbone with a detection head only (the live
+    loop never used SeisModel's magnitude head; magnitude comes from the multi-station ensemble)."""
+
+    def __init__(self, dim=64):
+        super().__init__()
+        self.backbone = WaveBackbone(dim)
+        self.det = nn.Linear(dim, 1)
+
+    def forward(self, x):                      # x: (B, NPTS) std-normalized -> logits (B,)
+        return self.det(self.backbone(x)).squeeze(-1)
+
+
 def sta_lta_scores(waves, sta_s=0.5, lta_s=5.0):
     """Max STA/LTA ratio per window (classic detector score)."""
     nsta, nlta = int(sta_s * SR), int(lta_s * SR)

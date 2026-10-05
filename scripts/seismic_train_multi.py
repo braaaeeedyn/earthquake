@@ -59,21 +59,27 @@ class GCN(nn.Module):
 
 
 class MultiStationModel(nn.Module):
-    def __init__(self, Ahat, dim=64, hybrid=False, n_aux=4):
+    """amp_feature=True (v2): waveforms arrive unit-peak-normalized per station and each station's
+    standardized log10 peak velocity joins log-distance as a node feature, so the CNN reads SHAPE and
+    the graph reads SIZE (amplitude vs distance) -- stable across M3 at 200 km to M7 in the near field."""
+
+    def __init__(self, Ahat, dim=64, hybrid=False, n_aux=4, amp_feature=False):
         super().__init__()
         self.register_buffer("Ahat", torch.tensor(Ahat))
         self.hybrid = hybrid
+        self.amp_feature = amp_feature
         self.cnn = WaveCNN3(dim)
-        self.g1 = GCN(dim + 1, dim); self.g2 = GCN(dim, dim)
+        self.g1 = GCN(dim + 1 + int(amp_feature), dim); self.g2 = GCN(dim, dim)
         enc = nn.TransformerEncoderLayer(dim, 4, 128, batch_first=True, dropout=0.1)
         self.tr = nn.TransformerEncoder(enc, 1)
         self.head = nn.Sequential(nn.Linear(dim + (n_aux if hybrid else 0), 32),
                                   nn.ReLU(), nn.Linear(32, 1))
 
-    def forward(self, x, mask, logdist, aux=None):
+    def forward(self, x, mask, logdist, aux=None, logamp=None):
         B, S = x.shape[:2]
         e = self.cnn(x.reshape(B * S, 3, -1)).reshape(B, S, -1)
-        feat = torch.cat([e, logdist.unsqueeze(-1)], -1) * mask.unsqueeze(-1).float()
+        parts = [e, logdist.unsqueeze(-1)] + ([logamp.unsqueeze(-1)] if self.amp_feature else [])
+        feat = torch.cat(parts, -1) * mask.unsqueeze(-1).float()
         h = self.g2(self.g1(feat, self.Ahat), self.Ahat)
         pad = ~mask
         h = self.tr(h, src_key_padding_mask=pad).masked_fill(pad.unsqueeze(-1), 0.0)

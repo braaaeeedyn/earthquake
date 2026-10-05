@@ -1,37 +1,30 @@
-"""LIVE Southern-California earthquake detector — the models run continuously on a real-time
-waveform stream (no USGS in the loop).
+"""LIVE Southern-California earthquake detector: the trained models on a real-time SeedLink stream.
 
-Architecture:
-  SeedLink stream (10 CI/SCEDC SoCal stations)  -> rolling per-station buffers
-    -> DATA-QUALITY gate (`clean_window`) drops artefact windows -- gap-fill zeros, stuck/flat runs,
-       clipping, glitch spikes -- BEFORE scoring, so live telemetry junk can't masquerade as an onset
-    -> DETECTION model runs continuously on sliding 30 s vertical windows
-    -> GRADED declaration: >= K stations that CLUSTER together (<= COHERENCE_KM) + a move-out check =
-       a CONFIRMED event; a lone high-confidence station = a TENTATIVE one. Only CONFIRMED events are
-       PUSHED (tentatives are logged, not pushed -- lone live triggers are almost all noise).
-    -> location proxy (strongest-triggering station) + MAGNITUDE model sizes CONFIRMED events
-    -> devices subscribed to any triggering station get ONE combined push (STATION subscription, no coords)
+The engine is src/eq/pipeline.py (shared with the offline replay harness, so what is measured
+offline is exactly what runs here):
 
-Honesty:
-  - USGS is bypassed: the detector genuinely fires on the raw stream. But SeedLink latency is
-    seconds-to-tens-of-seconds, so this is RAPID DETECTION, not sub-second pre-arrival warning.
-  - Sizing uses the in-distribution 10-station magnitude ensemble. Event LOCATION is a proxy
-    (the strongest-triggering station), not a true locator, so distance/shaking are estimates.
-  - Coverage is the 10 SoCal stations the models were trained on. Statewide needs a retrain.
+  SeedLink (19 CI stations of eq/network.py, pinned location codes)  -> per-station buffers
+    -> data-quality gate -> DETECT (30 s windows, data time) -> PICK the P onset
+    -> LOCATE: >= 3 picks that fit one source = CONFIRMED (1-2 stations / poor fit = TENTATIVE, log only)
+    -> SIZE once P+25 s has arrived: windows cut [P-5, P+25] per station, distance from the LOCATED
+       epicentre (training geometry) -> magnitude ensemble (+ spread)
+    -> PUSH iff CONFIRMED and M >= alert floor and PUSH_ENABLED=1 (env) -- to devices subscribed to
+       any station within the event's reach; one combined message per device
 
-Run:
-  python scripts/live_watch.py --selftest            # deterministic pipeline check (dry-run)
-  python scripts/live_watch.py --replay              # verify detection + sizing on cached events
-  python scripts/live_watch.py                       # LIVE (needs an always-on host + network)
-  python scripts/live_watch.py --server rtserve.iris.washington.edu:18000 --min-stations 4
+Honesty: SeedLink latency is seconds to tens of seconds and sizing waits for P+25 s, so pushes go out
+roughly 30-60 s after origin: RAPID DETECTION, not pre-arrival early warning. Coverage is strongest
+where >= 3 stations are within ~100 km (LA basin, Inland Empire, Mojave, Ridgecrest, Kern).
+
+  python scripts/live_watch.py --selftest      # deterministic checks (no network)
+  python scripts/live_watch.py                 # LIVE (pushes only if PUSH_ENABLED=1)
 """
 import argparse
 import datetime
 import json
+import os
 import sys
 import threading
 import time
-from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -41,205 +34,129 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
 import shaking_model  # noqa: E402
-from nearme_watch import haversine_km  # noqa: E402
+from eq import locate, network, seismic  # noqa: E402
+from eq.pipeline import Config, Event, MagnitudeEnsemble, Pipeline  # noqa: E402
 
 DETECTOR = ROOT / "data" / "processed" / "detector.pt"
 MAG_CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
-PHASE2A = ROOT / "data" / "processed" / "seismic_phase2a_xl.npz"
-PHASE1 = ROOT / "data" / "processed" / "seismic_phase1.npz"
-EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"   # durable audit log of declared events
-
-SR = 100.0
-NPTS = 3000                       # 30 s @ 100 Hz
-SCALE = 7.773395e-4               # training amplitude scale = X[mask].std() over phase2a_xl (m/s);
-                                  # must equal prep()'s scale in seismic_train_multi for the deployed
-                                  # magnitude_ensemble.pt (verified: its am/asd match this npz exactly)
-NET = "CI"
-
-# Tunables (also CLI flags)
-DET_THRESH = 0.60                 # per-station detection probability to count as a trigger
-MIN_STATIONS = 2                  # CONFIRM tier: stations that must agree for a corroborated event
-LONE_THRESH = 0.85                # a SINGLE station alerts (tentative) only above this higher floor,
-                                  # so lone triggers catch small quakes without pushing on plain noise
-ALERT_MIN_MAG = 3.0               # felt-shaking floor: push a CONFIRMED event only if the model sizes
-                                  # it >= this. The magnitude net is trained on M>=3.5, so sub-floor
-                                  # estimates are unreliable AND too small to be felt -- log, don't push.
-COINC_WIN = 12.0                  # seconds within which triggers count toward the same event
-COOLDOWN = 120.0                  # seconds to suppress re-alerting the same event (keyed per station)
-V_MIN = 2.0                       # km/s: slowest wave used to bound plausible inter-station move-out
-PICK_JITTER = 4.0                 # s: slack for detection-window / timing jitter in the move-out check
-COHERENCE_KM = 150.0              # CONFIRM tier: agreeing stations must cluster within this of the
-                                  # strongest one. A real local quake lights up NEIGHBOURS; two far-apart
-                                  # stations glitching in the same 12 s window are independent noise, not
-                                  # one source (move-out alone can't reject that at a short window).
-# ALERT POLICY: only CONFIRMED (>= MIN_STATIONS coherent stations) events are PUSHED. Lone-station
-# triggers are still declared + logged (tentative) but NOT pushed -- on the live stream they are almost
-# all telemetry noise. `clean_window` (below) also gates artefact windows out before the detector runs.
-# A device is alerted when any station it subscribes to triggers; no per-user distance is computed.
+EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
+STATUS = ROOT / "data" / "processed" / "live_status.json"
+BUFFER_S = 300.0                  # seconds of 3-component history kept per station
+STALE_S = 90.0                    # a station whose newest sample is older than this is "down"
+ALERT_REACH_KM = 150.0            # devices subscribed to a station within this of the epicentre are alerted
 
 
-# ---------------------------------------------------------------- network + models
-
-def load_network():
-    """Canonical station list + coordinates (small arrays; .npz loads them without X)."""
-    d = np.load(PHASE2A, allow_pickle=True)
-    stations = [str(s) for s in d["stations"]]     # e.g. 'CI.CCC'
-    coords = np.asarray(d["coords"], float)        # (10, 2) lat, lon — same order as the models
-    return stations, coords
-
-
-def load_detector():
+def load_detector(device="cpu"):
     import torch
-    from seismic_train import SeisModel
-    ck = torch.load(DETECTOR, weights_only=False)
-    m = SeisModel()
+    from seismic_train import DetectorNet
+    ck = torch.load(DETECTOR, weights_only=False, map_location=device)
+    if list(ck["stations"]) != network.CODES:
+        raise RuntimeError(f"detector trained on {list(ck['stations'])}, network is {network.CODES}")
+    m = DetectorNet().to(device)
     m.load_state_dict(ck["state"])
     m.eval()
     return m
 
 
-def load_magnitude(coords):
-    import torch
-    from seismic_train_multi import MultiStationModel, adjacency
-    ck = torch.load(MAG_CKPT, weights_only=False)
-    Ahat = adjacency(coords)
-    models = [MultiStationModel(Ahat, hybrid=True) for _ in ck["states"]]
-    for mdl, st in zip(models, ck["states"]):
-        mdl.load_state_dict(st)
-        mdl.eval()
-    return models, ck["am"], ck["asd"]
+# ---------------------------------------------------------------- live waveform source
+
+class LiveSource:
+    """Rolling per-station buffers fed by SeedLink. Times are epoch seconds of the DATA."""
+
+    def __init__(self, inv):
+        import obspy
+        self.inv = inv
+        self.lock = threading.Lock()
+        self.buf = {c: obspy.Stream() for c in network.CODES}
+        self.last_packet = {}
+
+    def add(self, tr):
+        c = tr.stats.station
+        if c not in self.buf or tr.stats.location != network.LOC[c]:
+            return
+        with self.lock:
+            self.buf[c] += tr
+            self.buf[c].merge(fill_value=0)
+            self.buf[c].trim(starttime=self.buf[c][0].stats.endtime - BUFFER_S)
+            self.last_packet[c] = time.time()
+
+    def _snap(self, c):
+        with self.lock:
+            return self.buf[c].copy()
+
+    def end(self, c):
+        with self.lock:
+            z = self.buf[c].select(channel="??Z")
+            if not len(z):
+                return None
+            e = float(z[0].stats.endtime.timestamp)
+        return e if time.time() - e < STALE_S else None
+
+    def z(self, c, t1, t2):
+        z = self._snap(c).select(channel="??Z")
+        if not len(z):
+            return None
+        tr = z[0]
+        x = seismic.lowpass(tr.data.astype(np.float64) - np.mean(tr.data))
+        i1 = int(round((t1 - tr.stats.starttime.timestamp) * seismic.SR))
+        n = int(round((t2 - t1) * seismic.SR))
+        return x[i1:i1 + n] if i1 >= 0 and i1 + n <= len(x) else None
+
+    def zne(self, c, t1, t2):
+        st = self._snap(c)
+        if len(st) < 3:
+            return None
+        t0 = st[0].stats.starttime
+        x = seismic.to_zne(st, self.inv, t0, int(round((st[0].stats.endtime - t0) * seismic.SR)) + 1)
+        if x is None:
+            return None
+        i1 = int(round((t1 - t0.timestamp) * seismic.SR))
+        n = int(round((t2 - t1) * seismic.SR))
+        return x[:, i1:i1 + n] if i1 >= 0 and i1 + n <= x.shape[1] else None
+
+    def health(self):
+        now = time.time()
+        out = {}
+        for c in network.CODES:
+            e = None
+            with self.lock:
+                z = self.buf[c].select(channel="??Z")
+                if len(z):
+                    e = float(z[0].stats.endtime.timestamp)
+            out[c] = {"up": e is not None and now - e < STALE_S,
+                      "latency_s": None if e is None else round(now - e, 1)}
+        return out
 
 
-# ---------------------------------------------------------------- inference wrappers
+# ---------------------------------------------------------------- events: log + push
 
-def detect_prob(det_model, wave):
-    """P(earthquake) for one 30 s vertical window (per-window normalized, as in training)."""
-    import torch
-    x = wave.astype(np.float32)
-    x = (x - x.mean()) / (x.std() + 1e-6)
-    with torch.no_grad():
-        e = det_model.backbone(torch.tensor(x)[None])
-        return float(torch.sigmoid(det_model.det(e)).item())
+def nearest_station(lat, lon):
+    d = locate.haversine_km(lat, lon, network.COORDS[:, 0], network.COORDS[:, 1])
+    i = int(np.argmin(d))
+    return network.CODES[i], float(d[i])
 
 
-def estimate_magnitude(models, am, asd, Xraw, mask, dist):
-    """Deep network magnitude from response-removed velocity (m/s). Same path as demo_magnitude.
-
-    Xraw: (10, 3, NPTS) velocity; mask: (10,) recorded; dist: (10,) km to the (proxy) epicentre.
-    """
-    import torch
-    Xn = (Xraw / SCALE).astype(np.float32)[None]                       # (1,10,3,NPTS)
-    m = mask.astype(bool)[None]
-    logdist = np.where(dist > 0, np.log10(np.maximum(dist, 1.0)), 0.0).astype(np.float32)[None]
-    rec = mask.astype(bool)
-    peak = np.log10(np.abs(Xraw[rec]).reshape(rec.sum(), -1).max(1) + 1e-12)
-    ld = np.log10(np.maximum(dist[rec], 1.0))
-    feats = np.array([peak.mean(), peak.max(), ld.mean(), ld.min()], np.float32)
-    afn = ((feats - am) / asd).astype(np.float32)[None]
-    xs, ms, ls, a = (torch.tensor(Xn), torch.tensor(m), torch.tensor(logdist), torch.tensor(afn))
-    with torch.no_grad():
-        preds = [float(mdl(xs, ms, ls, a).item()) for mdl in models]
-    return float(np.mean(preds))
-
-
-# ---------------------------------------------------------------- event handling
-
-def moveout_ok(first_time_by_sta, coords):
-    """A single seismic source can only produce inter-station arrival-time differences up to the
-    stations' separation divided by the wave speed (triangle inequality). So if any pair of
-    triggering stations fired FARTHER apart in time than a wavefront at >= V_MIN could explain,
-    the triggers cannot be one event -- reject them (this kills scattered multi-station noise).
-    A necessary condition, not a locator: it never rejects a real event, only impossible ones."""
-    stas = list(first_time_by_sta)
-    for i in range(len(stas)):
-        for j in range(i + 1, len(stas)):
-            a, b = stas[i], stas[j]
-            dt = abs(first_time_by_sta[a] - first_time_by_sta[b])
-            dkm = haversine_km(coords[a][0], coords[a][1], coords[b][0], coords[b][1])
-            if dt > dkm / V_MIN + PICK_JITTER:
-                return False
-    return True
-
-
-def _max_run(w):
-    """Length of the longest run of identical consecutive samples (stuck / flat / zero-fill signature)."""
-    change = np.flatnonzero(np.diff(w) != 0)
-    if change.size == 0:
-        return len(w)
-    bounds = np.concatenate(([-1], change, [len(w) - 1]))
-    return int(np.diff(bounds).max())
-
-
-def clean_window(w):
-    """Data-quality gate. Reject a live window carrying telemetry artefacts the detector never saw in
-    training (and so misreads as onsets at high confidence): gap-fill zeros, stuck/flat runs, clipping,
-    or an isolated glitch spike. Real ground motion passes; only artefact windows are skipped."""
-    if len(w) < NPTS:
-        return False
-    if np.mean(w == 0.0) > 0.05:                      # gap-fill: real data is ~never exactly 0 for long
-        return False
-    if _max_run(w) > 50:                              # > 0.5 s of a constant value = stuck/filled sensor
-        return False
-    amax = float(np.max(np.abs(w)))
-    if amax == 0.0 or np.mean(np.abs(w) >= 0.999 * amax) > 0.01:   # clipping: many samples at the rail
-        return False
-    med = np.median(w)
-    mad = np.median(np.abs(w - med)) + 1e-9
-    z = np.abs(w - med) / (1.4826 * mad)              # robust z-scores
-    if z.max() > 30.0 and int(np.sum(z > 10.0)) < 3:  # one huge lone outlier = glitch, not a real onset
-        return False
-    return True
-
-
-def declare_graded(triggers, now, confirm_stations, coords):
-    """Graded declaration over triggers within COINC_WIN. Returns (station_indices, strongest_idx,
-    confirmed) or None:
-      - >= confirm_stations stations that CLUSTER near the strongest (<= COHERENCE_KM) AND a physically
-        consistent move-out                                                          -> confirmed=True
-      - exactly one station, at prob >= LONE_THRESH                                  -> confirmed=False
-      - anything else (scattered/far-apart noise, or a weak lone trigger)            -> None
-    `triggers` is a deque of (time, sta_idx, prob)."""
-    recent = [t for t in triggers if now - t[0] <= COINC_WIN]
-    by_sta = {}                       # sta_idx -> best detection prob
-    first = {}                        # sta_idx -> earliest trigger time (for the move-out check)
-    for t, si, p in recent:
-        by_sta[si] = max(by_sta.get(si, 0.0), p)
-        first[si] = min(first.get(si, t), t)
-    if not by_sta:
-        return None
-    strongest = max(by_sta, key=by_sta.get)
-    # geographic coherence: keep only triggering stations clustered near the strongest one, so two
-    # stations glitching far apart in the same window can't spuriously "confirm" each other.
-    slat, slon = coords[strongest][0], coords[strongest][1]
-    near = [si for si in by_sta if haversine_km(slat, slon, coords[si][0], coords[si][1]) <= COHERENCE_KM]
-    if len(near) >= confirm_stations and moveout_ok({si: first[si] for si in near}, coords):
-        return sorted(near), strongest, True
-    if len(by_sta) == 1 and by_sta[strongest] >= LONE_THRESH:
-        return [strongest], strongest, False
-    return None
-
-
-def push_eligible(confirmed, mag, min_mag):
-    """A declaration is pushed only if it is CONFIRMED and the model sized it at/above the felt floor.
-    Unsized (mag is None) or sub-floor events are logged but not pushed (see ALERT_MIN_MAG)."""
-    return bool(confirmed and mag is not None and mag >= min_mag)
-
-
-def log_event(names, coords, stas, strongest, mag, conf, pushed, confirmed):
-    """Append one declared event to the JSONL audit log (durable, flushed -- independent of stdout
-    buffering) so scripts/crosscheck_events.py can later score it against the USGS catalog."""
+def log_event(ev: Event, pushed, eligible):
+    code, dkm = nearest_station(ev.lat, ev.lon)
     rec = {
         "t": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "epoch": time.time(),
-        "confirmed": bool(confirmed),
-        "n_stations": len(stas),
-        "stations": [names[i] for i in stas],
-        "proxy_station": names[strongest],
-        "proxy_lat": float(coords[strongest][0]),
-        "proxy_lon": float(coords[strongest][1]),
-        "mag": None if mag is None else round(float(mag), 2),
-        "det_conf": round(float(conf), 3),
+        "origin": round(ev.t0, 2),
+        "confirmed": bool(ev.confirmed),
+        "n_stations": len(ev.stations),
+        "stations": [network.CODES[i] for i in ev.stations],
+        "picks": ev.picks,
+        "lat": round(ev.lat, 3), "lon": round(ev.lon, 3),
+        "rms_s": None if ev.rms != ev.rms else round(ev.rms, 2),
+        "silent_near": ev.silent_near,
+        "nearest_station": code, "nearest_km": round(dkm, 1),
+        "mag": None if ev.mag is None else round(ev.mag, 2),
+        "mag_spread": None if ev.mag_spread is None else round(ev.mag_spread, 2),
+        "sized_stations": ev.sized_stations,
+        "push_eligible": bool(eligible),
         "pushed": int(pushed),
+        # legacy fields read by crosscheck_events.py
+        "proxy_station": code, "proxy_lat": round(ev.lat, 3), "proxy_lon": round(ev.lon, 3),
     }
     EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(EVENTS_LOG, "a", encoding="utf-8") as f:
@@ -247,254 +164,158 @@ def log_event(names, coords, stas, strongest, mag, conf, pushed, confirmed):
     return rec
 
 
-def alert_push_devices(tokens, event_stations, strongest_name, station_coords, mag, nstations,
-                       confirmed, dry_run):
-    """Push each device subscribed to ANY of the event's stations exactly once. The message is
-    personalized by DISTANCE from the event to the user's NEAREST subscribed station — a proxy for
-    how far the quake is from them, derived from station coordinates (we store no user location).
-    `station_coords` maps station code -> (lat, lon); `event_stations`/`strongest_name` are codes.
+def push_message(ev: Event, user_stations):
+    """One message for a device: distance from the LOCATED epicentre to its nearest subscribed sensor."""
+    subs = [s for s in user_stations if s in network.INDEX]
+    d = min(float(locate.haversine_km(ev.lat, ev.lon, *network.COORDS[network.INDEX[s]])) for s in subs)
+    code, _ = nearest_station(ev.lat, ev.lon)
+    region = dict((s[0], s[4]) for s in network.LIVE_NETWORK)[code]
+    label, _ = shaking_model.describe(shaking_model.estimate_mmi(ev.mag, d))
+    shake = " Likely too far to be felt where you are." if label == "Not felt" else f" {label} shaking possible near you."
+    title = f"M{ev.mag:.1f} earthquake detected ({region})"
+    body = (f"{len(ev.stations)} sensors located it about {d:.0f} km from your nearest sensor.{shake} "
+            f"Rapid detection, not an official warning.")
+    return title, body
 
-      confirmed  -> "nearest to <strongest> (~D km from you), M<mag>, <intensity> shaking expected"
-      tentative  -> "one sensor <D km from you> — unconfirmed, may be a false alarm" """
-    event_set = set(event_stations)
-    slat, slon = station_coords[strongest_name]
+
+def alert_devices(ev: Event, tokens, dry_run):
+    """Push each device subscribed to any station within ALERT_REACH_KM of the epicentre, once."""
+    d = locate.haversine_km(ev.lat, ev.lon, network.COORDS[:, 0], network.COORDS[:, 1])
+    reach = {network.CODES[i] for i in np.flatnonzero(d <= ALERT_REACH_KM)}
     sent = 0
     for t in tokens:
-        subs = [s for s in t.get("stations", []) if s in station_coords]
-        if event_set.isdisjoint(subs):
-            continue                                  # device isn't subscribed to any triggering station
-        # distance from the (proxy) epicentre to the user's nearest subscribed sensor
-        d = min(haversine_km(slat, slon, station_coords[s][0], station_coords[s][1]) for s in subs)
-        where = (f"at the {strongest_name} station near you" if d < 15
-                 else f"nearest to the {strongest_name} station, about {d:.0f} km from you")
-        if confirmed:
-            size = f" Estimated M{mag:.1f}." if mag is not None else ""
-            shake = ""
-            if mag is not None:
-                label, _ = shaking_model.describe(shaking_model.estimate_mmi(mag, d))
-                shake = (" Likely too far to be felt at your area." if label == "Not felt"
-                         else f" {label} shaking expected at your area.")
-            title = f"Earthquake detected near {strongest_name}"
-            body = (f"{nstations} sensors agree — {where}.{size}{shake} "
-                    f"Rapid detection, not an official warning.")
-        else:
-            title = f"Possible quake near {strongest_name}"
-            body = (f"One sensor detected possible shaking {where} — unconfirmed and may be a false "
-                    f"alarm (no other station agrees yet). Not an official warning.")
+        subs = [s for s in t.get("stations", []) if s in network.INDEX]
+        if not subs or reach.isdisjoint(subs):
+            continue
+        title, body = push_message(ev, subs)
         if push_fcm.send_push(t["token"], title, body, dry_run):
             sent += 1
     return sent
 
 
-# ---------------------------------------------------------------- live SeedLink
+def handle_event(pipe, ev, dry_run, push_enabled):
+    eligible = pipe.push_eligible(ev)
+    sent = alert_devices(ev, push_fcm.load_tokens(), dry_run) if (eligible and push_enabled) else 0
+    log_event(ev, sent, eligible)
+    tag = "EVENT" if ev.confirmed else "TENTATIVE"
+    size = f"M{ev.mag:.1f}±{ev.mag_spread:.1f}" if ev.mag is not None else "unsized"
+    print(f"[{tag}] {len(ev.stations)} sta {','.join(network.CODES[i] for i in ev.stations)} "
+          f"at ({ev.lat:.2f},{ev.lon:.2f}) rms={ev.rms:.2f}s {size} eligible={eligible} pushed={sent}", flush=True)
+
+
+# ---------------------------------------------------------------- live
 
 def run_live(args):
-    import obspy
     from obspy.clients.fdsn import Client
     from obspy.clients.seedlink.easyseedlink import EasySeedLinkClient
-
-    stations, coords = load_network()
-    names = [s.split(".")[1] for s in stations]
-    idx_of = {n: i for i, n in enumerate(names)}
-    coord_of = {n: (float(coords[i][0]), float(coords[i][1])) for i, n in enumerate(names)}
+    cfg = Config.load()
     det = load_detector()
-    try:
-        mag_models, am, asd = load_magnitude(coords)
-    except Exception as e:
-        print(f"  magnitude model unavailable ({e!r}); detections will alert without size")
-        mag_models = None
-    print(f"Fetching station responses for {len(names)} stations...")
-    inv = Client("IRIS").get_stations(network=NET, station=",".join(names),
+    mag = MagnitudeEnsemble(MAG_CKPT, network.CODES, network.COORDS)
+    print(f"Fetching responses for {len(network.CODES)} stations...", flush=True)
+    inv = Client("IRIS").get_stations(network=network.NET, station=",".join(network.CODES),
                                       channel="HH?", level="response")
+    src = LiveSource(inv)
+    push_enabled = os.environ.get("PUSH_ENABLED", "0") == "1"
+    pipe = Pipeline(det, mag, network.COORDS, network.CODES, src, cfg,
+                    on_event=lambda ev: handle_event(pipe, ev, args.dry_run, push_enabled))
+    print(f"config {cfg}\npush {'ENABLED' if push_enabled else 'DISABLED (shadow mode)'}", flush=True)
 
-    buffers = {n: obspy.Stream() for n in names}     # per-station rolling 3C stream
-    lock = threading.Lock()
-    triggers = deque(maxlen=200)
-    last_alert = {}                                  # strongest sta_idx -> time of its last alert
-
-    def scan():
+    def loop():
+        last_status = 0.0
         while True:
-            time.sleep(args.scan)
-            now = time.time()
-            with lock:
-                snap = {n: buffers[n].copy() for n in names}
-            for n, st in snap.items():
-                z = st.select(channel="*Z")
-                if not len(z):
-                    continue
-                tr = z.merge(fill_value=0)[0]
-                if tr.stats.npts < NPTS:
-                    continue
-                w = tr.data[-NPTS:].astype(np.float32)
-                if not clean_window(w):
-                    continue                          # skip gap-fill / stuck / clipped / spike windows
-                p = detect_prob(det, w)
-                if p >= args.det_thresh:
-                    triggers.append((now, idx_of[n], p))
-            decl = declare_graded(triggers, now, args.min_stations, coords)
-            if decl and now - last_alert.get(decl[1], 0.0) > COOLDOWN:
-                stas, strongest, confirmed = decl
-                last_alert[strongest] = now
-                epi_lat, epi_lon = coords[strongest]
-                conf = max((p for t, si, p in triggers if now - t <= COINC_WIN and si in stas),
-                           default=0.0)
-                # size only CONFIRMED events (the magnitude ensemble needs the multi-station data)
-                mag = size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd) \
-                    if (confirmed and mag_models) else None
-                event_names = [names[i] for i in stas]
-                # PUSH only a CONFIRMED event the model sizes at/above the felt-shaking floor. Smaller
-                # quakes -- and events we could not size (mag is None) -- are still logged (confirmed=True)
-                # but not pushed: sub-floor magnitudes are below perception and outside the net's trained
-                # range. Tentative (lone-station) declarations are never pushed. Reload tokens each event
-                # so users who just signed up are covered.
-                push_ok = push_eligible(confirmed, mag, args.min_mag)
-                psent = alert_push_devices(push_fcm.load_tokens(), event_names, names[strongest],
-                                           coord_of, mag, len(stas), confirmed, args.dry_run) \
-                    if push_ok else 0
-                log_event(names, coords, stas, strongest, mag, conf, psent, confirmed)
-                tag = "EVENT" if confirmed else "TENTATIVE"
-                msize = f"M{mag:.1f}" if mag is not None else ("size n/a" if confirmed else "unconfirmed")
-                print(f"[{tag}] {len(stas)} station(s), near {names[strongest]} "
-                      f"({epi_lat:.2f},{epi_lon:.2f}) {msize} -> {psent} push alerted", flush=True)
+            time.sleep(1.0)
+            ends = [e for e in (src.end(c) for c in network.CODES) if e is not None]
+            if not ends:
+                continue
+            try:
+                pipe.step(max(ends))
+            except Exception as e:                       # noqa: BLE001  never let one bad step kill alerting
+                print(f"step error: {e!r}", flush=True)
+            if time.time() - last_status > 30:
+                last_status = time.time()
+                STATUS.write_text(json.dumps({"t": time.time(), "stations": src.health(),
+                                              "push_enabled": push_enabled}))
 
     class Client_(EasySeedLinkClient):
         def on_data(self, trace):
-            with lock:
-                buffers[trace.stats.station] += trace
-                buffers[trace.stats.station].merge(fill_value=0)
-                buffers[trace.stats.station].trim(starttime=obspy.UTCDateTime() - 120)
+            src.add(trace)
 
-    threading.Thread(target=scan, daemon=True).start()
-    print(f"Connecting to SeedLink {args.server} ...  (Ctrl-C to stop)")
-    # obspy 1.5.x bug: EasySeedLinkClient auto-connects in __init__ with SeedLinkConnection.timeout
-    # left at None, and connect() passes that None into is_connected(), crashing the `< timeout`
-    # comparison. Create without auto-connecting, set an explicit timeout, then connect.
+    threading.Thread(target=loop, daemon=True).start()
+    print(f"Connecting to SeedLink {args.server} ...", flush=True)
     cli = Client_(args.server, autoconnect=False)
-    cli.conn.timeout = 30
+    cli.conn.timeout = 30                                # obspy 1.5 EasySeedLinkClient timeout=None bug
     cli.connect()
-    for n in names:
-        cli.select_stream(NET, n, "HH?")
+    for c in network.CODES:
+        cli.select_stream(network.NET, c, f"{network.LOC[c]}HH?" if network.LOC[c] else "HH?")
     cli.run()
 
 
-def size_event(snap, names, coords, epi_lat, epi_lon, inv, mag_models, am, asd):
-    """Build response-removed 3C windows for the 10 stations from live buffers, then size."""
-    import obspy
-    Xraw = np.zeros((len(names), 3, NPTS), np.float32)
-    mask = np.zeros(len(names), bool)
-    dist = np.array([haversine_km(epi_lat, epi_lon, c[0], c[1]) for c in coords], np.float32)
-    for i, n in enumerate(names):
-        st = snap[n].copy()
-        if len(st) < 3:
-            continue
-        try:
-            st.merge(fill_value=0)
-            st.detrend("demean")
-            st.remove_response(inventory=inv, output="VEL", water_level=60)
-            if abs(st[0].stats.sampling_rate - SR) > 1e-6:
-                st.resample(SR)
-            comps = {}
-            for tr in st:
-                comps[tr.stats.channel[-1]] = tr.data[-NPTS:]
-            order = [c for c in ("Z", "N", "E") if c in comps] or list(comps)[:3]
-            for j, c in enumerate(order[:3]):
-                d = comps[c].astype(np.float32)
-                Xraw[i, j, -len(d):] = d[-NPTS:]
-            mask[i] = True
-        except Exception:
-            continue
-    if mask.sum() == 0:
+# ---------------------------------------------------------------- selftest
+
+class _FakeSource:
+    def __init__(self, now):
+        self.now = now
+
+    def end(self, c):
+        return self.now
+
+    def z(self, c, t1, t2):
         return None
-    return estimate_magnitude(mag_models, am, asd, Xraw, mask, dist)
 
-
-# ---------------------------------------------------------------- verification modes
-
-def replay(args):
-    """Verify the model wrappers on cached data (no network): detection on phase1 windows and
-    the deep magnitude path on a held-out phase2a event."""
-    det = load_detector()
-    d1 = dict(np.load(PHASE1, allow_pickle=True))
-    ev = np.where(d1["ydet"] == 1)[0][0]
-    no = np.where(d1["ydet"] == 0)[0][0]
-    pe = detect_prob(det, d1["waves"][ev])
-    pn = detect_prob(det, d1["waves"][no])
-    print(f"[replay] detection  event-window P={pe:.2f}   noise-window P={pn:.2f}  "
-          f"(event should be high, noise low)")
-
-    stations, coords = load_network()
-    mag_models, am, asd = load_magnitude(coords)
-    d2 = dict(np.load(PHASE2A, allow_pickle=True))
-    gi = int(np.argmax(d2["mag"]))                      # the largest held-out event
-    est = estimate_magnitude(mag_models, am, asd, d2["X"][gi], d2["mask"][gi], d2["dist"][gi])
-    print(f"[replay] magnitude  true M{d2['mag'][gi]:.1f}  ->  deep-ensemble estimate M{est:.1f}")
+    def zne(self, c, t1, t2):
+        return None
 
 
 def selftest(args):
-    """Deterministic pipeline check (dry-run): both alert tiers, and station-based targeting."""
-    stations, coords = load_network()
-    names = [s.split(".")[1] for s in stations]
-    coord_of = {n: (float(coords[i][0]), float(coords[i][1])) for i, n in enumerate(names)}
-    now = time.time()
+    """Deterministic checks: location from synthetic picks, the 3-station confirmation rule, the
+    tentative path, the push floor and message targeting. No network, no models."""
+    cfg = Config()
+    src = _FakeSource(1000.0)
+    got = []
+    pipe = Pipeline(None, None, network.COORDS, network.CODES, src, cfg, on_event=got.append)
+    lat, lon, t0 = 34.05, -117.55, 900.0                     # synthetic quake in the Inland Empire
+    d = locate.haversine_km(lat, lon, network.COORDS[:, 0], network.COORDS[:, 1])
+    near = np.argsort(d)[:4]
+    for i in near:
+        pipe.accept_pick(int(i), t0 + float(locate.travel_time(d[i])) + 3, 3.0, 10.0, 0.95)
+    pipe.associate(t0 + 40)
+    ev = pipe.events[-1]
+    err = float(locate.haversine_km(lat, lon, ev.lat, ev.lon))
+    assert ev.confirmed and len(ev.stations) >= 3 and err < 10, (ev, err)
+    print(f"[selftest] 4 synthetic picks -> CONFIRMED, located {err:.1f} km from truth, rms {ev.rms:.2f}s")
 
-    # CONFIRMED: K stations agree -> combined push to a device subscribed to one of them.
-    trig = deque((now, i, 0.9) for i in range(args.min_stations))
-    decl = declare_graded(trig, now, args.min_stations, coords)
-    assert decl and decl[2] is True, "K agreeing stations should confirm"
-    stas, strongest, confirmed = decl
-    event_names = [names[i] for i in stas]
-    # a subscriber whose only station is a FAR one (so the message shows a real distance from them)
-    far = max(names, key=lambda n: haversine_km(*coord_of[names[strongest]], *coord_of[n]))
-    subbed = {"token": "selftest-token", "stations": [far], "name": "subbed"}
-    other = {"token": "other-token", "stations": [names[(strongest + 5) % len(names)]], "name": "other"}
-    # targeting: only devices subscribed to a triggering station are recipients (dry-run send returns
-    # False, so we assert on the membership filter directly rather than on the sent count).
-    recipients = [t["name"] for t in (subbed, other) if not set(event_names).isdisjoint(t["stations"])]
-    assert recipients == [], "a subscriber to a non-triggering station must NOT be alerted"
-    subbed["stations"] = [names[strongest], far]      # now they follow a triggering station too
-    alert_push_devices([subbed, other], event_names, names[strongest], coord_of, 5.2, len(stas), True, dry_run=True)
-    print(f"[selftest] CONFIRMED near {names[strongest]}: message shows distance to the user's "
-          f"nearest subscribed sensor + estimated shaking")
+    pipe2 = Pipeline(None, None, network.COORDS, network.CODES, src, cfg, on_event=got.append)
+    for i in near[:2]:
+        pipe2.accept_pick(int(i), t0 + float(locate.travel_time(d[i])) + 3, 3.0, 10.0, 0.95)
+    pipe2.associate(t0 + 60)
+    assert pipe2.events and not pipe2.events[-1].confirmed, "2 stations must stay TENTATIVE"
+    print("[selftest] 2 agreeing stations -> TENTATIVE (logged, never pushed)")
 
-    # TENTATIVE: a single high-confidence station -> unconfirmed push to its subscribers only.
-    lone = deque([(now, 0, 0.92)])
-    decl2 = declare_graded(lone, now, args.min_stations, coords)
-    assert decl2 and decl2[2] is False, "a lone strong station should be tentative"
-    alert_push_devices([{"token": "t", "stations": [names[0]], "name": "s"}],
-                       [names[0]], names[0], coord_of, None, 1, False, dry_run=True)
-    print(f"[selftest] TENTATIVE near {names[0]}: unconfirmed push to its subscribers (may be false)")
+    ev.mag = cfg.alert_min_mag + 0.4
+    assert pipe.push_eligible(ev)
+    ev.mag = cfg.alert_min_mag - 0.1
+    assert not pipe.push_eligible(ev)
+    assert not pipe2.push_eligible(pipe2.events[-1])
+    print(f"[selftest] push floor M{cfg.alert_min_mag:g}: only confirmed events at/above it are eligible")
 
-    # A weak lone station must NOT alert.
-    assert declare_graded(deque([(now, 0, 0.7)]), now, args.min_stations, coords) is None, \
-        "a weak lone station should not declare"
-
-    # Felt-shaking floor: a confirmed event is pushed only when sized at/above args.min_mag.
-    assert push_eligible(True, args.min_mag + 0.1, args.min_mag), "confirmed, above floor -> push"
-    assert not push_eligible(True, args.min_mag - 0.1, args.min_mag), "confirmed, below floor -> no push"
-    assert not push_eligible(True, None, args.min_mag), "confirmed but unsized -> no push"
-    assert not push_eligible(False, 9.0, args.min_mag), "tentative -> never pushed"
-    print(f"[selftest] push floor: only confirmed events >= M{args.min_mag:g} are pushed")
-    print("[selftest] weak lone trigger correctly suppressed")
+    ev.mag = 4.2
+    title, body = push_message(ev, [network.CODES[int(near[0])]])
+    assert "M4.2" in title and "sensors" in body
+    far_only = [c for c in network.CODES if locate.haversine_km(ev.lat, ev.lon, *network.COORDS[network.INDEX[c]])
+                > ALERT_REACH_KM][:1]
+    assert alert_devices(ev, [{"token": "x", "stations": far_only}], dry_run=True) == 0
+    print(f"[selftest] message: {title!r} / {body!r}")
+    print("[selftest] devices subscribed only to far stations are not alerted")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="rtserve.iris.washington.edu:18000", help="SeedLink host:port")
-    ap.add_argument("--min-stations", type=int, default=MIN_STATIONS, dest="min_stations",
-                    help="stations that must agree to CONFIRM an event (fewer => a tentative alert)")
-    ap.add_argument("--det-thresh", type=float, default=DET_THRESH, dest="det_thresh")
-    ap.add_argument("--min-mag", type=float, default=ALERT_MIN_MAG, dest="min_mag",
-                    help="push a confirmed event only if its estimated magnitude is >= this (felt floor)")
-    ap.add_argument("--scan", type=float, default=2.0, help="seconds between detection scans")
-    ap.add_argument("--dry-run", action="store_true", help="print instead of pushing")
+    ap.add_argument("--server", default="rtserve.iris.washington.edu:18000")
+    ap.add_argument("--dry-run", action="store_true", help="print pushes instead of sending")
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--replay", action="store_true")
     args = ap.parse_args()
-
     if args.selftest:
         selftest(args)
-    elif args.replay:
-        replay(args)
     else:
         run_live(args)
 

@@ -17,13 +17,13 @@ type State =
 const ROWS = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detection_demo.png',
-    desc: 'Give it 30 seconds of shaking recorded by a sensor and it decides whether a real earthquake is happening or whether it is just ordinary background noise like traffic or wind. It has learned what genuine quakes look like, so it spots ones that the older, simpler alarm would miss. On earthquakes it had never seen before, it makes the right call about 99% of the time.',
-    tech: '',
+    desc: 'Give it 30 seconds of shaking recorded by a sensor and it decides whether a real earthquake is happening or whether it is just ordinary background noise like traffic or wind. It was trained on the 19 stations that actually stream live, including the noise that used to fool the old version, and on held-out data it is right more than 99% of the time no matter where in the window the quake begins.',
+    tech: 'Technical: single-station CNN → transformer on 30 s vertical windows (1 Hz high-pass, unit-std), trained with the P onset placed anywhere 1–25 s into the window and with hard negatives mined from the live system’s own false alarms. Chronological held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886, versus STA/LTA AUC 0.816. Live, an event is only confirmed when at least 3 stations’ P-wave picks fit one located source.',
   },
   {
     n: '02', kicker: 'Size', key: 'magnitude', q: 'How big is it?', figure: 'magnitude_demo.png',
-    desc: 'It estimates the size, or magnitude, of the earthquake by looking at the readings from many sensor stations at the same time. Combining the whole network of stations is what makes the estimate accurate. Relying on only the one station nearest the quake barely works.',
-    tech: 'Technical: network-magnitude regression. Per-station 3-component waveforms feed a CNN feature extractor, then a graph convolution across the 10-station network, then a transformer, then a magnitude head. On 1,126 SoCal events (2000–2025), the 5-seed ensemble scores R² = 0.840 (MAE 0.12) versus an amplitude + distance linear baseline at R² = 0.749. A nearest-single-station ablation drops to R² +0.42, isolating the multi-station graph fusion as the source of the skill.',
+    desc: 'It estimates the size, or magnitude, of the earthquake by reading many sensor stations at once, after first locating where the quake started. Combining the network is what makes the estimate sharp: on held-out quakes it is typically within about 0.1 of the official magnitude.',
+    tech: 'Technical: network-magnitude regression. Each station’s 3-component window, cut 5 s before its picked P arrival, feeds a CNN (waveform shape, unit-peak normalized); its log peak velocity and distance from the located epicentre join it as graph-node features; a graph convolution across the 19-station network and a transformer then produce the magnitude. On 6,243 SoCal events (M2–7.1, 2000–2026), the 5-seed ensemble scores R² 0.951 (MAE 0.10) on the chronological test split versus an amplitude + distance baseline at R² 0.886 (MAE 0.16); the nearest-single-station ablation drops to R² 0.808.',
   },
   {
     n: '03', kicker: 'Warn', key: 'eew_alert', q: 'How hard will it shake?', figure: 'eew_demo.png',
@@ -499,7 +499,8 @@ function Result({
   evOpen: boolean
   onToggleEv: () => void
 }) {
-  const fmt = (v: number) => (t.metric === 'recall' ? v.toFixed(2) : v.toFixed(3))
+  // 4 decimals near 1 so e.g. AUC 0.9998 never rounds up to a perfect-looking 1.000
+  const fmt = (v: number) => (t.metric === 'recall' ? v.toFixed(2) : v >= 0.995 ? v.toFixed(4) : v.toFixed(3))
   const verdict = t.winner === 'deep' ? 'deep wins' : t.winner === 'tie' ? 'tie' : 'baseline wins'
   return (
     <article className="result">
@@ -821,7 +822,18 @@ function NearMe() {
 
   useEffect(() => {
     getStations()
-      .then(setStations)
+      .then((list) => {
+        setStations(list)
+        // The network was re-chosen (stations that never streamed live were replaced). Drop saved codes
+        // the network no longer has; the server already moved those subscriptions to the nearest new sensor.
+        const known = new Set(list.map((s) => s.code))
+        const stale = savedSubs.filter((c) => !known.has(c))
+        if (stale.length) {
+          setSelected((prev) => new Set([...prev].filter((c) => known.has(c))))
+          setSubscribedSet((prev) => new Set([...prev].filter((c) => known.has(c))))
+          setMsg({ kind: 'err', text: `The sensor network was upgraded and ${stale.join(', ')} ${stale.length > 1 ? 'were' : 'was'} retired. Your alerts were moved to the nearest new sensor — review your sensors below and tap Subscribe/Update to confirm.` })
+        }
+      })
       .catch(() => setMsg({ kind: 'err', text: 'Couldn’t load the sensor list — is the backend running?' }))
   }, [])
 

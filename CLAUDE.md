@@ -70,8 +70,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 Deep-learning seismology for **Southern California**, **deployed live at https://seismicsocal.duckdns.org**
 (Oracle Always-Free A1 VM). Three models — **Detect** (is it a quake?), **Size** (magnitude), **Warn**
 (early-warning shaking) — each shown working on real held-out SCEDC waveforms vs the classic seismology
-baseline, plus a **live SeedLink daemon** that runs detection + magnitude on a real-time station stream
-and **push-alerts** subscribers. Framed as a *research demonstration*, not an operational warning system.
+baseline, plus a **live SeedLink daemon** that detects, picks, locates and sizes quakes on a real-time
+19-station stream and **push-alerts** subscribers. Framed as a *research demonstration*, not an operational warning system.
 
 _History: the project began as near-term (7-day) earthquake **forecasting** from geomagnetic (INTERMAGNET)
 data. On real data that thesis came up **null** — superposed-epoch p=0.83, ROC ≈ chance, as the literature
@@ -80,110 +80,101 @@ catalog/waveform helpers). Work pivoted to seismic-waveform deep learning, where
 CNN/GNN/Transformer architecture genuinely works._
 
 ### The three models
-Current numbers — **2000–2025 dataset**, 5-seed ensembles on a **chronological 70/15/15** split:
+Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Aug 2026), 5-seed models,
+**chronological 70/15/15** split:
 
 | Task | Architecture | Deep (held-out test) | Baseline |
 |------|--------------|----------------------|----------|
-| **Detect** | CNN → Transformer (single-station) | AUC **0.992**, MCC 0.930 (n=880) | STA/LTA 0.550 |
-| **Size** | CNN → **GNN** → Transformer (multi-station) | R² **0.840**, MAE 0.12 (n=169) | amp+dist 0.749 |
-| **Warn (EEW)** | CNN → GNN → Transformer, first ~8 s → future PGV | alert **MCC 0.760**, recall 0.76 | GMPE-style 0.655 |
+| **Detect** | CNN → Transformer (single-station, 30 s, 1 Hz HP) | AUC **0.9998**, MCC 0.886 (n=7,303) | STA/LTA 0.816 |
+| **Size** | CNN → **GNN** → Transformer (multi-station, unit-peak + log-amp node feature) | R² **0.951**, MAE 0.10 (n=937, M2–5.2) | amp+dist 0.886 |
+| **Warn (EEW)** | CNN → GNN → Transformer, first ~8 s → future PGV | alert **MCC 0.760** | GMPE-style 0.655 |
 
-- Detect + Size were **retrained on the 2000–2025 data** (1,126 magnitude events / 5,863 detection
-  windows). EEW numbers are from the earlier run — **EEW has not been retrained.**
-- Size: the nearest-1-station ablation drops to R² **+0.42** (vs 0.840) — the multi-station **GNN fusion**
-  is what earns the win. Detect uses no GNN (one window, one station).
+- Data: 6,243 magnitude events (M2.0–7.1) / 50,743 detection windows (34,377 event, 14,304 noise,
+  2,062 hard negatives = the old daemon's own Sep-22..Oct-5 false declarations). `build_dataset.py`.
+- Size: nearest-1-station ablation R² 0.808; live-like (10 km loc error, 3–6 stations) R² 0.939.
+- **EEW is legacy** (earlier 10-station data, not retrained, not live).
+- **Replay harness (the acceptance test)** on 10 held-out days: 93 % of confirmed events real (chance 0 %),
+  5 pushes / 0 false, magnitudes within ±0.13 of catalog, median location error 2.5 km. Event-centric
+  (616 test events, live geometry): mag bias +0.06, MAE 0.12, loc err 4.3 km. Old daemon, same days:
+  6 pushes, all false.
 
 ### Locked rules — do not change without asking
-- **Chronological splits only**, never random (temporal leakage). `split_chrono` = 70/15/15 by event time.
-- **Honest metrics:** ROC-AUC + MCC (detection), R²/MAE vs baseline (magnitude), and for alerts report
-  **MCC, not recall alone** (recall is gameable once you tune the threshold). Data is imbalanced.
-- **Conservative public claims** — this does detection / characterization / rapid shaking estimation,
-  NOT earthquake prediction (whether one will occur; unsolved).
+- **Chronological splits only**, never random (temporal leakage). 70/15/15 by time. Hard negatives split
+  by date (train Sep 22–28, val Sep 29–Oct 1, test Oct 2–5 2026); replay calibration uses validation days
+  only, test days are scored once.
+- **Honest metrics:** ROC-AUC + MCC (detection), R²/MAE vs baseline (magnitude), alerts by MCC/precision
+  not recall alone; every live/replay precision is reported next to a **time-shifted chance baseline**.
+- **Conservative public claims** — detection / characterization / rapid shaking estimation, NOT prediction.
 - **Design: LIGHT MODE ONLY** — Ollama-referenced, monochrome (black ink / gray body / one black accent,
   filled-black pills, 12px cards), tokens in plain `:root` in `app/src/index.css`, sourced from `DESIGN.md`.
   No dark theme or toggle. Off-palette color is flagged by the impeccable design hook.
-- **Live magnitude SCALE:** `live_watch.py` normalises waveforms by a hardcoded `SCALE` = the training
-  set's `X[mask].std()`. If you rebuild the magnitude dataset, **update `SCALE`** to match or live
-  magnitudes are biased (currently `7.773395e-4` = `X[mask].std()` of `seismic_phase2a_xl.npz`, verified
-  against the deployed `magnitude_ensemble.pt` — its stored `am`/`asd` match that npz exactly).
+- **One station list:** `src/eq/network.py`. Builder, daemon, API, scorer, replay all import it. A station
+  must stream on the public SeedLink relay (`build_dataset.py --stage check` enforces it).
+- **Training input == live input.** Shared code only: `locate.pick_p` aligns training windows AND live
+  windows; `pipeline.det_prep` is the detector input everywhere; `seismic.lowpass` (18 Hz) on every trace.
+  Checkpoints carry their normalizers + station list; the daemon refuses a checkpoint whose stations differ.
+  (There is no hand-kept `SCALE` constant any more.)
 
 ### How it fits together (Frontend / Online / Offline)
-- **OFFLINE (training).** `seismic_build*.py` fetch SCEDC waveforms (labeled against the USGS catalog via
-  `quakecast.py`) → `.npz` datasets; `seismic_train*.py` / `demo_*.py` train → checkpoints
-  (`detector.pt`, `magnitude_ensemble.pt`, `eew_ensemble.pt`) + figures + `app/public/seismic.json`.
-  Nothing user-facing computes live; the app reads the cached numbers.
-- **ONLINE (live).** `server.py` (stdlib backend, no framework) **auto-spawns `live_watch.py`**.
-  `live_watch` streams the 10 CI/SCEDC stations over **SeedLink**, runs **detection continuously**,
-  declares on **graded coincidence** (below), sizes **confirmed** events with the magnitude ensemble, and
-  **pushes (FCM)** devices subscribed to any triggering station. `server.py` also serves `/api/ca`
-  (biggest SoCal quakes, USGS/FDSN), `/api/geocode`, `/api/stations`, `/api/register-push`,
-  `/api/unregister-push`, `/api/status`, `/api/contact`. **EEW is NOT in the live loop** (offline evidence
-  only); the live "warning" shaking is the `shaking_model.py` mag+distance formula, not the trained net.
+- **OFFLINE (PC).** `build_dataset.py` (USGS catalog M1+ via `quakecast.py`; one SCEDC request per event,
+  response-removed, cached in `data/raw/v2/`) → `data/processed/v2/{detection,magnitude}.npz`;
+  `demo_detect.py` / `demo_magnitude.py` train on the GPU → `detector.pt`, `magnitude_ensemble.pt`;
+  `replay_archive.py` scans archived continuous data, calibrates `data/processed/v2/pipeline_config.json`
+  (validation days) and scores test days. `app/public/seismic.json` holds the published numbers.
+- **ONLINE (VM).** `server.py` auto-spawns `live_watch.py`, a thin SeedLink shell around
+  `src/eq/pipeline.py` (detect → pick → locate → size → decide, all on data time). `/api/status` includes
+  per-station health from `data/processed/live_status.json`. Other routes: `/api/ca`, `/api/geocode`,
+  `/api/stations`, `/api/register-push`, `/api/unregister-push`, `/api/version`, `/api/contact`.
+  EEW is NOT live; the push wording uses `shaking_model.py` (mag + distance).
 - **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size/Warn carousel (reads `seismic.json`),
-  a biggest-quakes carousel, and "Alert me near me" (station-subscription push — **mobile app only**;
-  web has no push). Android APK downloadable from `/app`.
+  biggest-quakes carousel, "Alert me near me" (station subscription, mobile app only).
 
-### Alerts: station-subscription + graded coincidence (design, 2026-09-21)
-- **Subscribe to STATIONS, not a coordinate.** `data/processed/push_tokens.json` = `[{token, stations:[codes], name}]`
-  — **no lat/lon stored.** Signup ranks the 10 stations by distance, auto-selects the nearest 3 within a
-  150 km cap (`NEAR_TOP_N`/`NEAR_CAP_KM` in `App.tsx`), and each is a tap-toggle (per-sensor unsubscribe).
-- **Graded declaration (`declare_graded`):** ≥2 stations agree + move-out check → **CONFIRMED** (sized);
-  a lone station at prob ≥ `LONE_THRESH=0.85` → **TENTATIVE** (labelled a possible false alarm); weak lone
-  triggers suppressed. Cooldown is per-strongest-station. `events.jsonl` logs each declaration (with a
-  `confirmed` flag) for `crosscheck_events.py`.
-- **Felt-shaking push floor (`ALERT_MIN_MAG`, default M3.0; `--min-mag`):** a CONFIRMED event is PUSHED
-  only if the magnitude model sizes it **≥ the floor**; smaller or unsized events are still logged
-  (`confirmed=True`) but not pushed. The magnitude net is trained on **M≥3.5**, so sub-floor estimates are
-  both unreliable and below perception. NOTE: the net currently *under-reads* live (real M3+ read ~M2.5),
-  so the floor needs recalibration against the VM `events.jsonl` before it is trusted to not suppress real
-  events — see Open TODOs.
-- **One combined push per device**, personalised by distance from the epicenter-proxy (strongest station)
-  to the user's nearest subscribed station; `shaking_model` gives the intensity string. `shaking_model` is
-  on the MESSAGE path (wording), NOT the alert DECISION (which is station membership + coincidence tier).
+### Alerts: station subscription + located, 3-station confirmation (2026-10-05)
+- **Subscribe to STATIONS, not a coordinate.** `push_tokens.json` = `[{token, stations:[codes], name}]`,
+  no lat/lon stored. A device is alerted when a pushed event is within 150 km (`ALERT_REACH_KM`) of a
+  station it follows; one message, distance from the located epicentre to its nearest followed station.
+- **CONFIRMED** = >= 3 P picks that one grid-search location fits (RMS <= 1.5 s), at most 1 healthy
+  nearer station silent, nearest pick <= 120 km. 1–2 stations → TENTATIVE (logged, never pushed).
+- **Push** iff CONFIRMED and M >= 3.0 and `PUSH_ENABLED=1` (env; default OFF = shadow mode).
+  Rationale + validation numbers: `data/processed/v2/pipeline_config_reason.json`, README.
+- Coda of a big quake can re-trigger: picks within 120 s / 100 km of a declared event are absorbed
+  (costs: an aftershock inside that window is only logged as tentative).
 
 ### Run it
 - **Full stack (local):** `python scripts/server.py` + `cd app && npm run dev` (Vite proxies `/api` → `:8000`).
-- **Demos:** `python scripts/demo_{detect,magnitude,eew}.py` (add `--retrain --seeds 5`, or `--k 5` for eew).
-- **Daemon checks:** `python scripts/live_watch.py --selftest` (dry-run, both alert tiers) / `--replay` (cached).
-- **Rebuild data:** `python scripts/seismic_build.py` / `seismic_build_multi.py` (accept `--start`/`--end`;
-  first run is network-bound via ObsPy/SCEDC). See `DEPLOY.md` for the live-host update procedure.
+- **Rebuild data:** `python scripts/build_dataset.py` (network-bound ~2 h; `--stage check|select|fetch|assemble`).
+- **Train:** `python scripts/demo_detect.py --retrain --seeds 5`, `python scripts/demo_magnitude.py --retrain --seeds 5`
+  (CUDA torch is in `.venv`; RTX 4060).
+- **Replay / acceptance:** `python scripts/replay_archive.py scan|calibrate|run|events|compare-live` (see docstring).
+- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (16 tests).
 
 ### Env / secrets
-- `.venv` has `torch`, `scikit-learn`, `matplotlib`, `obspy` (`requirements-ml.txt`). Node/Vite for `app/`.
-- **Gitignored:** `.env` (SMTP), `fcm-service-account.json` (FCM push creds), `data/subscribers.json`,
-  `data/processed/*.npz` + `*.pt`. Datasets/checkpoints don't travel with git — **scp them on deploy.**
+- `.venv`: torch 2.12.1+cu126, scikit-learn, matplotlib, obspy, scipy, pandas, ruff. Node/Vite for `app/`.
+- **Gitignored:** `.env` (SMTP, `PUSH_ENABLED`), `fcm-service-account.json`, `data/processed/*` (npz, pt,
+  json), `data/raw/*`. Models + `data/processed/v2/{pipeline_config,tt_correction}.json` ship by scp —
+  **verify sha256 on the VM** (DEPLOY.md).
 
 ### Gotchas
-- Imbalanced data → report AUC/MCC vs base rate, never accuracy/F1 alone (a high F1 can be pure base rate).
-- SCEDC waveforms are cached under `data/raw/` (~11 GB) — **exclude it from any transfer.**
-- `load_catalog` caches to a **date-agnostic** CSV (`data/raw/usgs_california_seis_m2.5.csv`) — move it
-  aside before re-fetching a different date range, or the old range is silently reused.
-- The magnitude regressor **underpredicts the very largest events** (a known trait); mid-range is closer.
-- In the last detection rebuild **PFO returned no data** → 5 of the 6 detection stations were used;
-  investigate its channel availability to restore the 6th.
+- Imbalanced data → report AUC/MCC vs base rate, never accuracy/F1 alone.
+- `data/raw/` holds the legacy cache (~11 GB) + `data/raw/v2/` (~2 GB) — exclude from any transfer.
+- Pre-2010 SCEDC continuous archive is 40 Hz **BH**, not HH: the builder falls back to BH and every trace
+  gets the common 18 Hz low-pass.
+- Stations can drop off the public SeedLink relay (SCZ2 did during selection) — re-run
+  `build_dataset.py --stage check` / `select_network.py` before relying on a station.
+- USGS FDSN answers HTTP 400 (not a truncated list) above 20k rows; `quakecast` splits the interval.
+- Low RAM (16 GB, other apps): long background jobs can be reaped; everything is resumable/cached.
+- `crosscheck_events.py` line ~118 has a pre-existing unused variable (`c`) flagged by ruff F841.
 
-### Deployed (2026-09-22)
+### Deployed
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
-Caddy + systemd; the `seismicsocal` service runs the backend and auto-spawns the daemon). The
-backend + daemon run the **2000–2025 retrained models** with the corrected `SCALE`; the site shows
-0.992 / 0.840; the **Android APK** (built against the live backend) is served at `/app`. Subscribers live
-in `data/processed/push_tokens.json` **on the VM**. Update procedure = ship code + `.pt` models, `npm run
-build`, `sudo systemctl restart seismicsocal` (details in `DEPLOY.md`).
+Caddy + systemd). Update procedure and shadow-mode policy in `DEPLOY.md`. The VM was found (2026-10-04)
+running Aug-10 models on the old 10-station network — always verify checkpoint hashes after shipping.
 
 ### Open TODOs
-- **Live magnitude under-reads + calibrate the push floor.** Fixed `SCALE` (was `6.954687e-4`, a ~12%
-  under-normalization vs the checkpoint's training `X[mask].std()`), but cross-checking the VM
-  `events.jsonl` showed real M3+ events sized at ~M2.5 live — the net reads far below training range on
-  the live stream (OOD: it's trained on M≥3.5; also the distance proxy is the strongest *station*, not the
-  true epicentre, so the per-station `dist`/`logdist` aux features differ from training). Diagnose with
-  `--replay` on an env where torch+obspy+scipy load, then set `ALERT_MIN_MAG` from the post-fix mags of
-  the confirmed events that matched real USGS quakes vs. the false ones.
-- **"Replay a real earthquake" mode** — pick a historical CA event → walk it Detect → Size → Warn, showing
-  the alert fire + lead time. Self-contained, high demonstration payoff.
-- **Seed-averaged magnitude R² with a CI** — a 5-variant fine-tune search (augment / cosine LR / Huber /
-  dropout / physics-blend) found **no reliable gain** over 0.840 (the apparent cosine win evaporated at
-  matched seeds), so the ceiling looks real; a mean±CI writeup is still owed.
-- **Wire the EEW net into the live alert** (currently the mag/dist shaking formula) + surface the latency
-  caveat in the alert text.
-- **Statewide coverage** (dataset rebuild + magnitude/EEW retrain); restore PFO; add `@fontsource`
-  nunito/inter/geist-mono for design fidelity on Windows.
+- **Shadow mode → pushes:** after deploying v2, run >= 7 days with `PUSH_ENABLED=0`, score with
+  `crosscheck_events.py`, then enable.
+- **Rebuild the APK** (station-network message in `App.tsx`; needs the Android SDK).
+- **Replay the Sep 2020 validation week** (scan was reaped at 15/168 h for low memory) to widen calibration.
+- **Seed-averaged magnitude R² with a CI** write-up (QuakeOps Phase 2).
+- **Retrain EEW on the live network** and decide whether it belongs in the live alert.
+- QuakeOps (MLflow / gate / drift): see `QUAKEOPS_PLAN.md`, `QUAKEOPS_IMPLEMENTATION.md` (to be re-based on v2).

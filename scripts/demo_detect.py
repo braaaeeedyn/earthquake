@@ -1,22 +1,23 @@
-"""Live, reproducible DETECTION demo: the deep detector vs the classic STA/LTA baseline,
-on held-out real waveforms it never saw in training.
+"""Train + evaluate the v2 DETECTOR on the live network's data (data/processed/v2/detection.npz).
 
-This is the "it works" showpiece. Detection is the decisive, low-variance win (unlike
-magnitude/EEW), so it reproduces cleanly. The script trains once (cached), reports a
-seed-averaged test AUC with a spread, and then *shows* the model at work: individual
-held-out windows where the deep model is right and STA/LTA is wrong.
+What changed vs v1 (see URGENT_PLAN.md section 2.2):
+  - onset-position augmentation: P is placed anywhere 1-25 s into the 30 s window, so the detector
+    is time-invariant like the live sliding window (v1 only ever saw P at exactly 5 s);
+  - negatives = random-time noise (all hours, screened against ANY M>=1 quake) + HARD negatives
+    (the live daemon's own Sep-2026 false declarations); balanced batches, hard ones oversampled;
+  - seeds are selected on VALIDATION AUC (v1 picked the best seed on the test set);
+  - besides AUC/MCC vs STA/LTA on the chronological test split, it reports the OPERATIONAL number:
+    per-window false-positive rate on held-out live noise (Oct 2-5 2026 hard negatives).
 
-  python scripts/demo_detect.py                 # train if needed (cached), then demo
-  python scripts/demo_detect.py --retrain       # force retrain
-  python scripts/demo_detect.py --seeds 5 --epochs 12
+Splits: events/noise chronological 70/15/15 by time (locked rule). Hard negatives by date:
+train Sep 22-28, val Sep 29-Oct 1, test >= Oct 2 2026 (the old daemon log starts Sep 22; all after the event data, which ends Aug 2026).
 
-Outputs:
-  data/processed/detector.pt          best-seed weights + aux normalizer (persisted)
-  data/processed/detection_demo.json  per-seed AUCs, mean, spread, thresholds
-  figures/detection_demo.png          ROC (deep vs STA/LTA) + example held-out windows
+  python scripts/demo_detect.py --retrain --seeds 5      # train (GPU if available) + evaluate
+  python scripts/demo_detect.py                          # evaluate the saved checkpoint
 """
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,62 +28,119 @@ import torch.nn as nn
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from seismic_train import SeisModel, prep, split_chrono, sta_lta_scores, SR  # noqa: E402
+sys.path.insert(0, str(ROOT / "src"))
+from seismic_train import DetectorNet, sta_lta_scores, SR  # noqa: E402
 from sklearn.metrics import matthews_corrcoef, roc_auc_score, roc_curve  # noqa: E402
 
-NPZ = ROOT / "data" / "processed" / "seismic_phase1.npz"
+from eq import network  # noqa: E402
+from eq.pipeline import det_prep  # noqa: E402
+
+NPZ = ROOT / "data" / "processed" / "v2" / "detection.npz"
 CKPT = ROOT / "data" / "processed" / "detector.pt"
 SUMMARY = ROOT / "data" / "processed" / "detection_demo.json"
 FIG = ROOT / "figures" / "detection_demo.png"
+NPTS = 3000
+HARD_VAL = datetime(2026, 9, 29, tzinfo=timezone.utc).timestamp()
+HARD_TEST = datetime(2026, 10, 2, tzinfo=timezone.utc).timestamp()
+
+
+def split_chrono(t, fr=(0.7, 0.15)):
+    o = np.argsort(t, kind="stable")
+    n = len(o)
+    return o[:int(n * fr[0])], o[int(n * fr[0]):int(n * (fr[0] + fr[1]))], o[int(n * (fr[0] + fr[1])):]
+
+
+def git_commit():
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
+    except Exception:                                   # noqa: BLE001
+        return "unknown"
+
+
+def load():
+    d = np.load(NPZ)
+    pos, noise, hard = d["pos"], d["noise"], d["hard"]
+    # one chronological split over ALL event + noise windows (no window's future leaks into training)
+    t_all = np.concatenate([d["pos_time"], d["noise_time"]])
+    tr, va, te = split_chrono(t_all)
+    npos = len(pos)
+    sp = {k: (idx[idx < npos], idx[idx >= npos] - npos) for k, idx in (("tr", tr), ("va", va), ("te", te))}
+    ht = d["hard_time"]
+    hs = {"tr": np.flatnonzero(ht < HARD_VAL), "va": np.flatnonzero((ht >= HARD_VAL) & (ht < HARD_TEST)),
+          "te": np.flatnonzero(ht >= HARD_TEST)}
+    return d, pos, noise, hard, sp, hs, int(d["p_index"])
+
+
+def crops(arr, idx, starts):
+    """(len(idx), NPTS) detector inputs from arr[idx] at `starts` (det_prep: same as live)."""
+    if len(idx) == 0:
+        return np.zeros((0, NPTS), np.float32)
+    return det_prep(np.stack([arr[i, s:s + NPTS] for i, s in zip(idx, starts)]))
+
+
+def pos_starts(n, p_index, rng, fixed=None):
+    u = rng.uniform(1.0, 25.0, n) if fixed is None else np.full(n, fixed)
+    return (p_index - u * SR).astype(int)
+
+
+def neg_starts(arr, n, rng, fixed=False):
+    L = arr.shape[1]
+    return np.zeros(n, int) if fixed else rng.integers(0, L - NPTS + 1, n)
+
+
+def eval_sets(pos, noise, hard, sp, hs, p_index, split, onset=5.0):
+    """Deterministic evaluation windows: positives with P at `onset` s, noise/hard from their start."""
+    rng = np.random.default_rng(0)
+    pi, ni = sp[split]
+    X = np.concatenate([crops(pos, pi, pos_starts(len(pi), p_index, rng, onset)),
+                        crops(noise, ni, neg_starts(noise, len(ni), rng, True))])
+    y = np.r_[np.ones(len(pi)), np.zeros(len(ni))]
+    H = crops(hard, hs[split], neg_starts(hard, len(hs[split]), rng, True)) if len(hs[split]) else np.zeros((0, NPTS))
+    return X, y, H
+
+
+def predict(model, X, device):
+    model.eval()
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(X), 1024):
+            out.append(torch.sigmoid(model(torch.tensor(X[i:i + 1024], dtype=torch.float32, device=device))).cpu().numpy())
+    return np.concatenate(out) if out else np.zeros(0)
+
+
+def train_one(seed, pos, noise, hard, sp, hs, p_index, epochs, device):
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    model = DetectorNet().to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
+    ptr, ntr, htr = sp["tr"][0], sp["tr"][1], hs["tr"]
+    bs = 256
+    for _ in range(epochs):
+        model.train()
+        order = rng.permutation(ptr)
+        for b in range(0, len(order), bs // 2):
+            pi = order[b:b + bs // 2]
+            n_h = len(pi) // 3 if len(htr) else 0                       # ~1/3 of negatives are hard
+            ni = rng.choice(ntr, len(pi) - n_h)
+            hi = rng.choice(htr, n_h) if n_h else np.zeros(0, int)
+            X = np.concatenate([crops(pos, pi, pos_starts(len(pi), p_index, rng)),
+                                crops(noise, ni, neg_starts(noise, len(ni), rng)),
+                                crops(hard, hi, neg_starts(hard, len(hi), rng)) if n_h else np.zeros((0, NPTS))])
+            X *= rng.choice([-1.0, 1.0], (len(X), 1)).astype(np.float32)   # polarity augmentation
+            y = np.r_[np.ones(len(pi)), np.zeros(len(ni) + len(hi))].astype(np.float32)
+            opt.zero_grad()
+            loss = nn.functional.binary_cross_entropy_with_logits(
+                model(torch.tensor(X, dtype=torch.float32, device=device)), torch.tensor(y, device=device))
+            loss.backward()
+            opt.step()
+        sched.step()
+    return model
 
 
 def best_threshold(scores, labels):
-    """Threshold (over score quantiles) that maximizes MCC on a validation set."""
-    grid = np.quantile(scores, np.linspace(0.3, 0.9, 30))
-    return max(grid, key=lambda t: matthews_corrcoef(labels, scores >= t))
-
-
-def train_one(seed, w, auxn, ydet, mag, tr, te, epochs):
-    """Train one detector (detection+magnitude combined loss, as in seismic_train) -> (model, test_probs)."""
-    torch.manual_seed(seed)
-    model = SeisModel()
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    Xtr, Atr = torch.tensor(w[tr]), torch.tensor(auxn[tr])
-    ydtr, ymtr = torch.tensor(ydet[tr]), torch.tensor(mag[tr])
-    for _ in range(epochs):
-        model.train()
-        for b in torch.randperm(len(tr)).split(64):
-            opt.zero_grad()
-            pdd, pmm = model(Xtr[b], Atr[b])
-            loss = nn.functional.binary_cross_entropy_with_logits(pdd, ydtr[b])
-            m = ydtr[b] == 1
-            if m.any():
-                loss = loss + nn.functional.mse_loss(pmm[m], ymtr[b][m])
-            loss.backward()
-            opt.step()
-    model.eval()
-    with torch.no_grad():
-        pdt, _ = model(torch.tensor(w[te]), torch.tensor(auxn[te]))
-    return model, torch.sigmoid(pdt).numpy()
-
-
-def train_and_cache(w, auxn, ydet, mag, tr, va, te, amean, astd, seeds, epochs):
-    aucs, best = [], None
-    for s in range(seeds):
-        model, probs = train_one(s, w, auxn, ydet, mag, tr, te, epochs)
-        auc = roc_auc_score(ydet[te], probs)
-        aucs.append(auc)
-        print(f"  seed {s}: test AUC = {auc:.3f}")
-        if best is None or auc > best[0]:
-            best = (auc, model, s)
-    _, model, best_seed = best
-    torch.save({"state": model.state_dict(), "amean": amean, "astd": astd,
-                "best_seed": best_seed}, CKPT)
-    summary = {"seeds": seeds, "epochs": epochs, "seed_aucs": aucs,
-               "auc_mean": float(np.mean(aucs)), "auc_std": float(np.std(aucs)),
-               "best_seed": int(best_seed)}
-    SUMMARY.write_text(json.dumps(summary, indent=2))
-    return model, summary
+    grid = np.quantile(scores, np.linspace(0.3, 0.98, 60))
+    return float(max(grid, key=lambda t: matthews_corrcoef(labels, scores >= t)))
 
 
 def main():
@@ -90,130 +148,92 @@ def main():
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--retrain", action="store_true")
+    ap.add_argument("--out", default=str(CKPT))
     args = ap.parse_args()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    d, pos, noise, hard, sp, hs, p_index = load()
+    print(f"windows: pos {len(pos)}  noise {len(noise)}  hard {len(hard)}  | train pos/noise/hard "
+          f"{len(sp['tr'][0])}/{len(sp['tr'][1])}/{len(hs['tr'])}  device {device}")
+    Xva, yva, Hva = eval_sets(pos, noise, hard, sp, hs, p_index, "va")
+    Xte, yte, Hte = eval_sets(pos, noise, hard, sp, hs, p_index, "te")
 
-    d = dict(np.load(NPZ, allow_pickle=True))
-    w, aux = prep(d)
-    ydet, mag = d["ydet"].astype(np.float32), d["mag"].astype(np.float32)
-    tr, va, te = split_chrono(d["wtime"])
-    amean, astd = aux[tr].mean(0), aux[tr].std(0) + 1e-6
-    auxn = (aux - amean) / astd
-
-    if args.retrain or not CKPT.exists():
-        print(f"Training {args.seeds} detectors ({args.epochs} epochs each) on {len(tr)} "
-              f"windows, holding out {len(te)} for test...")
-        model, summary = train_and_cache(w, auxn, ydet, mag, tr, va, te, amean, astd,
-                                         args.seeds, args.epochs)
+    if args.retrain or not Path(args.out).exists():
+        best, seed_val, seed_test = None, [], []
+        for s in range(args.seeds):
+            m = train_one(s, pos, noise, hard, sp, hs, p_index, args.epochs, device)
+            av = roc_auc_score(yva, predict(m, Xva, device))
+            at = roc_auc_score(yte, predict(m, Xte, device))
+            seed_val.append(av); seed_test.append(at)
+            print(f"  seed {s}: val AUC {av:.4f}   test AUC {at:.4f}", flush=True)
+            if best is None or av > best[0]:                             # select on VALIDATION
+                best = (av, m, s)
+        _, model, bseed = best
+        pv = predict(model, np.concatenate([Xva, Hva]), device)
+        thr = best_threshold(pv, np.r_[yva, np.zeros(len(Hva))])
+        torch.save({"state": model.state_dict(), "thr": thr, "best_seed": bseed, "stations": network.CODES,
+                    "npts": NPTS, "trained": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "git": git_commit(), "dataset": json.loads((NPZ.parent / "dataset_meta.json").read_text())},
+                   args.out)
+        summary = {"seeds": args.seeds, "epochs": args.epochs, "seed_val_auc": seed_val, "seed_test_auc": seed_test,
+                   "auc_mean": float(np.mean(seed_test)), "auc_std": float(np.std(seed_test)), "best_seed": bseed}
     else:
-        ckpt = torch.load(CKPT, weights_only=False)
-        model = SeisModel()
-        model.load_state_dict(ckpt["state"])
-        model.eval()
         summary = json.loads(SUMMARY.read_text())
-        print(f"Loaded cached detector (best of {summary['seeds']} seeds). "
-              f"Use --retrain to rebuild.")
+    ck = torch.load(args.out, weights_only=False, map_location=device)
+    model = DetectorNet().to(device)
+    model.load_state_dict(ck["state"])
+    thr = ck["thr"]
 
-    # ---- best-seed model probabilities on val (for thresholds) and test ----
-    with torch.no_grad():
-        pv, _ = model(torch.tensor(w[va]), torch.tensor(auxn[va]))
-        pt, _ = model(torch.tensor(w[te]), torch.tensor(auxn[te]))
-    pv, pt = torch.sigmoid(pv).numpy(), torch.sigmoid(pt).numpy()
-
-    # ---- STA/LTA baseline: score everything, pick its threshold fairly on val ----
-    slt = sta_lta_scores(d["waves"])
-    thr_deep = best_threshold(pv, ydet[va])
-    thr_sta = best_threshold(slt[va], ydet[va])
-
-    yte = ydet[te].astype(int)
-    deep_pred = (pt >= thr_deep).astype(int)
-    sta_pred = (slt[te] >= thr_sta).astype(int)
-    auc_deep_te = roc_auc_score(yte, pt)
-    auc_sta_te = roc_auc_score(yte, slt[te])
-
-    # ---- report: seed-averaged headline, then held-out accuracy on this split ----
-    print(f"\n=== DETECTION on held-out real waveforms (test n={len(te)}, "
-          f"{int(yte.sum())} events) ===")
-    print(f"  deep detector : AUC (best seed on this split) = {auc_deep_te:.3f}")
-    print(f"  deep detector : AUC (mean of {summary['seeds']} seeds) = "
-          f"{summary['auc_mean']:.3f} +/- {summary['auc_std']:.3f} (1 s.d.)")
-    print(f"  STA/LTA base  : AUC = {auc_sta_te:.3f}")
-    print(f"  at MCC-optimal thresholds -> deep MCC={matthews_corrcoef(yte, deep_pred):+.3f}"
-          f"  STA/LTA MCC={matthews_corrcoef(yte, sta_pred):+.3f}")
-
-    # ---- show it working: windows where deep is right and STA/LTA is wrong ----
-    staid, wtime, stns = d["staid"][te], d["wtime"][te], d["stations"]
-    def stamp(i):
-        name = stns[staid[i]]
-        dt = datetime.fromtimestamp(float(wtime[i]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        return f"{name} {dt}"
-
-    caught = [i for i in range(len(te))                       # events deep catches, STA/LTA misses
-              if yte[i] == 1 and deep_pred[i] == 1 and sta_pred[i] == 0]
-    rejected = [i for i in range(len(te))                     # noise deep rejects, STA/LTA false-alarms
-                if yte[i] == 0 and deep_pred[i] == 0 and sta_pred[i] == 1]
-    print(f"\n  deep is right where STA/LTA is wrong: {len(caught)} events caught that STA/LTA "
-          f"missed, {len(rejected)} false alarms STA/LTA raised that deep rejected. Examples:")
-    for i in (caught[:2] + rejected[:2]):
-        truth = "event" if yte[i] == 1 else "noise"
-        dv = "event" if deep_pred[i] == 1 else "noise"
-        sv = "event" if sta_pred[i] == 1 else "noise"
-        mark = "miss" if yte[i] == 1 else "false alarm"
-        print(f"    {stamp(i):<26} truth={truth:<5}  deep P(event)={pt[i]:.2f}->{dv} "
-              f"[OK]   STA/LTA->{sv} [X] {mark}")
-
-    make_figure(yte, pt, slt[te], auc_deep_te, auc_sta_te, d["waves"][te],
-                caught, rejected, stamp, pt, summary)
-    print(f"\n  wrote {FIG.relative_to(ROOT)}  and  {SUMMARY.relative_to(ROOT)}")
+    pt = predict(model, Xte, device)
+    auc = roc_auc_score(yte, pt)
+    mcc = matthews_corrcoef(yte, pt >= thr)
+    slt = sta_lta_scores(Xte)
+    sva = sta_lta_scores(Xva)
+    auc_s = roc_auc_score(yte, slt)
+    mcc_s = matthews_corrcoef(yte, slt >= best_threshold(sva, yva))
+    # time invariance: AUC with P at other positions in the window
+    inv = {}
+    for onset in (2.0, 12.0, 22.0):
+        Xo, yo, _ = eval_sets(pos, noise, hard, sp, hs, p_index, "te", onset)
+        inv[onset] = float(roc_auc_score(yo, predict(model, Xo, device)))
+    # operational: per-window false-positive rate on held-out LIVE noise and on test noise
+    fpr_live = float(np.mean(predict(model, Hte, device) >= thr)) if len(Hte) else float("nan")
+    fpr_noise = float(np.mean(pt[yte == 0] >= thr))
+    print(f"\n=== DETECTION, chronological test (n={len(yte)}, {int(yte.sum())} event windows) ===")
+    print(f"  deep detector : AUC {auc:.4f}  MCC {mcc:+.3f}   (seed mean AUC {summary['auc_mean']:.4f} "
+          f"+/- {summary['auc_std']:.4f})")
+    print(f"  STA/LTA       : AUC {auc_s:.4f}  MCC {mcc_s:+.3f}")
+    print("  time-invariance (AUC with P at 2/12/22 s): " + ", ".join(f"{v:.4f}" for v in inv.values()))
+    print(f"  per-window FPR at thr={thr:.3f}: test noise {fpr_noise:.4f}   held-out LIVE noise "
+          f"(Oct 2-5, n={len(Hte)}) {fpr_live:.4f}")
+    summary.update({"test_auc": auc, "test_mcc": mcc, "sta_lta_auc": auc_s, "sta_lta_mcc": mcc_s, "thr": thr,
+                    "n_test": int(len(yte)), "n_test_events": int(yte.sum()), "auc_by_onset": inv,
+                    "fpr_test_noise": fpr_noise, "fpr_live_noise": fpr_live, "n_live_noise": int(len(Hte))})
+    SUMMARY.write_text(json.dumps(summary, indent=2))
+    make_figure(yte, pt, slt, auc, auc_s, summary)
+    print(f"  wrote {FIG.relative_to(ROOT)} and {SUMMARY.relative_to(ROOT)}")
 
 
-def make_figure(yte, pt, slt_te, auc_deep, auc_sta, waves_te, caught, rejected, stamp, probs, summary):
+def make_figure(yte, pt, slt, auc_deep, auc_sta, summary):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    DEEP, BASE, GOOD = "#534AB7", "#888780", "#1f9d6b"
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
-
-    # ROC: deep vs STA/LTA on the held-out test set
-    axr = axes[0, 0]
+    DEEP, BASE = "#111111", "#888780"
+    fig, ax = plt.subplots(1, 2, figsize=(11, 4.6))
     fd, td, _ = roc_curve(yte, pt)
-    fs, ts, _ = roc_curve(yte, slt_te)
-    axr.plot(fd, td, color=DEEP, lw=2.2, label=f"deep  AUC={auc_deep:.3f}")
-    axr.plot(fs, ts, color=BASE, lw=2.0, label=f"STA/LTA  AUC={auc_sta:.3f}")
-    axr.plot([0, 1], [0, 1], "k--", lw=0.8)
-    axr.set_xlabel("false positive rate"); axr.set_ylabel("true positive rate")
-    axr.set_title("Detection ROC (held-out test)", fontweight="bold")
-    axr.legend(loc="lower right", fontsize=9)
-
-    # Seed spread bar
-    axb = axes[0, 1]
-    sa = summary["seed_aucs"]
-    axb.bar(range(len(sa)), sa, color=DEEP)
-    axb.axhline(summary["auc_mean"], color="k", lw=1, ls="--",
-                label=f"mean {summary['auc_mean']:.3f}±{summary['auc_std']:.3f}")
-    axb.axhline(auc_sta, color=BASE, lw=1.5, label=f"STA/LTA {auc_sta:.3f}")
-    axb.set_ylim(0.5, 1.0); axb.set_xlabel("seed"); axb.set_ylabel("test AUC")
-    axb.set_title("Reproducibility across seeds", fontweight="bold")
-    axb.legend(fontsize=8, loc="lower left")
-
-    # Two example waveforms: one caught event, one rejected false alarm (deep right, STA/LTA wrong)
-    picks = [caught[0] if caught else rejected[0],
-             rejected[0] if rejected else caught[-1]]
-    t = np.arange(waves_te.shape[1]) / SR
-    for k, i in enumerate(picks):
-        ax = axes[1, k]
-        ax.plot(t, waves_te[i], color=GOOD if yte[i] == 1 else BASE, lw=0.6)
-        truth = "EVENT" if yte[i] == 1 else "NOISE"
-        err = "STA/LTA missed it" if yte[i] == 1 else "STA/LTA false-alarmed"
-        ax.set_title(f"{truth}  ·  deep P={probs[i]:.2f} (correct)  ·  {err}",
-                     fontsize=9, color=GOOD if yte[i] == 1 else "#333")
-        ax.set_xlabel("time (s)"); ax.set_yticks([])
-        ax.text(0.01, 0.97, stamp(i), transform=ax.transAxes, fontsize=7,
-                va="top", color="#666")
-
-    fig.suptitle("Deep seismic detector vs. classic STA/LTA — shown working on held-out data",
-                 fontsize=14, fontweight="bold")
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fs, ts, _ = roc_curve(yte, slt)
+    ax[0].plot(fd, td, color=DEEP, lw=2.2, label=f"deep  AUC={auc_deep:.3f}")
+    ax[0].plot(fs, ts, color=BASE, lw=2.0, label=f"STA/LTA  AUC={auc_sta:.3f}")
+    ax[0].plot([0, 1], [0, 1], "k--", lw=0.8)
+    ax[0].set_xlabel("false positive rate"); ax[0].set_ylabel("true positive rate")
+    ax[0].set_title("Detection ROC (chronological test)", fontweight="bold")
+    ax[0].legend(loc="lower right", fontsize=9)
+    sa = summary["seed_test_auc"] if "seed_test_auc" in summary else []
+    ax[1].bar(range(len(sa)), sa, color=DEEP)
+    ax[1].axhline(auc_sta, color=BASE, lw=1.5, label=f"STA/LTA {auc_sta:.3f}")
+    ax[1].set_ylim(0.5, 1.0); ax[1].set_xlabel("seed"); ax[1].set_ylabel("test AUC")
+    ax[1].set_title("Reproducibility across seeds", fontweight="bold"); ax[1].legend(fontsize=8)
+    fig.suptitle("Deep detector vs STA/LTA on the live network (held-out, 2000-2026 data)", fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     FIG.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIG, dpi=140)
 

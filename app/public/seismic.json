@@ -1,56 +1,76 @@
 {
   "project": "Seismic deep learning",
   "model": "CNN + GNN + Transformer (shared backbone)",
-  "generated_at": "2026-09-21",
+  "generated_at": "2026-10-05",
   "dataset": {
-    "events": 1126,
-    "stations": 10,
-    "mag_min": 3.5,
+    "events": 6243,
+    "stations": 19,
+    "mag_min": 2.0,
     "mag_max": 7.1,
-    "region": "Southern California (SCEDC network)"
+    "region": "Southern California (19 live-streaming SCSN stations)"
   },
   "tasks": [
     {
       "key": "detection",
       "name": "Detection",
       "metric": "ROC-AUC",
-      "deep": 0.992,
-      "baseline": 0.550,
+      "deep": 0.9998,
+      "baseline": 0.816,
       "baseline_name": "STA/LTA",
       "winner": "deep",
-      "desc": "Is an earthquake present in a 30-second window? The CNN+Transformer learns waveform morphology a classic threshold detector can't. 5-seed mean AUC 0.992±0.007 on a held-out test set of 880 windows (255 events)."
+      "desc": "Is an earthquake present in a 30-second window? Trained on the 19 stations that stream live, with the P onset anywhere in the window and the old system's own false alarms as hard negatives. Chronological held-out test of 7,303 windows (4,964 events): AUC 0.9998, MCC 0.886; STA/LTA on the same filtered input reaches 0.816."
     },
     {
       "key": "magnitude",
       "name": "Magnitude",
       "metric": "R²",
-      "deep": 0.840,
-      "baseline": 0.749,
+      "deep": 0.951,
+      "baseline": 0.886,
       "baseline_name": "amp + distance",
       "winner": "deep",
-      "desc": "Network magnitude from multi-station 3-component traces. 5-seed ensemble R² 0.840 on 1,126 events (2000–2025); the multi-station GNN fusion earns it - a nearest-single-station ablation drops to R² +0.42."
+      "desc": "Network magnitude from multi-station 3-component traces aligned on picked P arrivals, with distances from the located epicentre. 5-seed ensemble R² 0.951 (MAE 0.10) on 937 held-out events (M2-5.2) vs 0.886 for amplitude + distance; in live-like conditions (10 km location error, 3-6 stations) R² 0.939."
     },
     {
       "key": "eew_reg",
       "name": "Early warning · shaking level",
       "metric": "R²",
       "deep": 0.728,
-      "baseline": 0.720,
+      "baseline": 0.72,
       "baseline_name": "early-amp + dist",
       "winner": "tie",
-      "desc": "From the first 8 seconds of P-wave, predict the peak ground velocity that arrives later. Ties the physics baseline on the continuous value."
+      "desc": "From the first 8 seconds of P-wave, predict the peak ground velocity that arrives later. Ties the physics baseline on the continuous value. (EEW is offline evidence from the earlier 10-station dataset; not yet retrained on the live network.)"
     },
     {
       "key": "eew_alert",
       "name": "Early warning · alert",
       "metric": "MCC",
-      "deep": 0.760,
+      "deep": 0.76,
       "baseline": 0.655,
       "baseline_name": "GMPE-style",
       "winner": "deep",
-      "desc": "Will shaking exceed a notable threshold? With the alert trigger tuned on validation for recall, the deep model catches 76% of strong-shaking events (up from 65%) at 82% precision. The baseline reaches similar recall only by false-alarming twice as often, so on balanced alert quality (MCC) the deep model wins 0.76 vs 0.66."
+      "desc": "Will shaking exceed a notable threshold? With the alert trigger tuned on validation for recall, the deep model catches 76% of strong-shaking events (up from 65%) at 82% precision. The baseline reaches similar recall only by false-alarming twice as often, so on balanced alert quality (MCC) the deep model wins 0.76 vs 0.66. (EEW is offline evidence from the earlier 10-station dataset; not yet retrained on the live network.)"
     }
   ],
-  "stations": ["CCC", "CLC", "TOW2", "WBM", "PASC", "SVD", "RIO", "MWC", "DGR", "BAK"],
+  "stations": [
+    "PASC",
+    "BFS",
+    "SVD",
+    "DGR",
+    "BAR",
+    "IKP",
+    "SWS",
+    "BEL",
+    "GSC",
+    "GMR",
+    "EDW2",
+    "LRL",
+    "MPM",
+    "ISA",
+    "ARV",
+    "SMM",
+    "MPP",
+    "SNCC",
+    "CIA"
+  ],
   "disclaimer": "Research prototype on real California network data, not an operational warning system. The project's original geomagnetic earthquake-precursor forecast was retired after honest validation showed no out-of-sample signal; it pivoted to seismic-waveform deep learning, where the same architecture works. Short-term earthquake prediction (whether one will occur) remains unsolved - this does detection, characterization, and seconds-ahead shaking estimation."
 }

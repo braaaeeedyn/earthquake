@@ -13,13 +13,16 @@ Run it by hand any time, or nightly (e.g. a cron / systemd timer on the host):
   python scripts/crosscheck_events.py --since 2026-09-01 --mag-floor 3.0 --json report.json
 
 Honesty: the recall denominator assumes the network can detect quakes of >= --mag-floor within
---radius km of a station; that floor is a judgement call (a coincidence detector realistically
-needs ~M3+), so it is a CLI knob and is printed with the result. The proxy location is a station,
-not a true epicentre, so matching uses a generous --dist-tol.
+--radius km of a station; that floor is a judgement call, so it is a CLI knob printed with the result.
+Matching uses the LOCATED origin + epicentre (v2 logs; the old schema falls back to declaration time
++ station proxy) with tight defaults, and every precision is printed next to a CHANCE baseline (the
+same declarations shifted +1 h): SoCal has ~50 catalogued M1+ quakes a day, so loose windows "match"
+noise by coincidence -- the old generous 180 s / 100 km scorecard did exactly that.
 """
 import argparse
 import json
 import math
+import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -27,7 +30,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
-PHASE2A = ROOT / "data" / "processed" / "seismic_phase2a_xl.npz"
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 
 
@@ -57,11 +59,10 @@ def load_events(since_epoch, log_path=EVENTS_LOG):
 
 
 def station_coords():
-    """(lats, lons) of the trained network, for the region bound. numpy only loads the small arrays."""
-    import numpy as np
-    d = np.load(PHASE2A, allow_pickle=True)
-    c = np.asarray(d["coords"], float)
-    return c[:, 0].tolist(), c[:, 1].tolist()
+    """(lats, lons) of the live network (src/eq/network.py), for the region bound."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from eq import network
+    return network.COORDS[:, 0].tolist(), network.COORDS[:, 1].tolist()
 
 
 def usgs_query(params):
@@ -96,11 +97,21 @@ def real_quakes_in_region(since_epoch, now_epoch, lats, lons, radius_km, mag_flo
     return out
 
 
-def match_real_for_declared(ev, time_tol, dist_tol):
-    """The real quake nearest in time to a declared event within (time_tol, dist_tol), or None."""
-    g = usgs_query({"starttime": iso(ev["epoch"] - time_tol), "endtime": iso(ev["epoch"] + time_tol),
-                    "latitude": ev["proxy_lat"], "longitude": ev["proxy_lon"],
-                    "maxradiuskm": dist_tol})
+def ev_time_loc(ev):
+    """(time, lat, lon) of a declaration: the LOCATED origin + epicentre when the log has them (v2
+    pipeline), else the old schema's declaration time and station proxy."""
+    if ev.get("origin") is not None and ev.get("lat") is not None:
+        return ev["origin"], ev["lat"], ev["lon"]
+    return ev["epoch"], ev["proxy_lat"], ev["proxy_lon"]
+
+
+def match_real_for_declared(ev, time_tol, dist_tol, shift=0.0, min_mag=1.0):
+    """The real quake (>= min_mag) nearest in time to a declared event within (time_tol, dist_tol),
+    or None. `shift` moves the declaration in time -- with shift=3600 this measures CHANCE matches."""
+    t, lat, lon = ev_time_loc(ev)
+    t += shift
+    g = usgs_query({"starttime": iso(t - time_tol), "endtime": iso(t + time_tol), "minmagnitude": min_mag,
+                    "latitude": lat, "longitude": lon, "maxradiuskm": dist_tol})
     best = None
     for f in g.get("features", []):
         p = f.get("properties", {})
@@ -108,7 +119,7 @@ def match_real_for_declared(ev, time_tol, dist_tol):
         if p.get("mag") is None:
             continue
         cand = {"id": f["id"], "mag": float(p["mag"]), "place": p.get("place") or "",
-                "epoch": p["time"] / 1000.0, "dt": p["time"] / 1000.0 - ev["epoch"]}
+                "epoch": p["time"] / 1000.0, "dt": p["time"] / 1000.0 - t}
         if best is None or abs(cand["dt"]) < abs(best["dt"]):
             best = cand
     return best
@@ -122,9 +133,11 @@ def main():
     ap.add_argument("--mag-floor", type=float, default=3.0, dest="mag_floor",
                     help="min magnitude counted as detectable for the recall denominator (default 3.0)")
     ap.add_argument("--radius", type=float, default=150.0, help="km from any station to count a quake (default 150)")
-    ap.add_argument("--time-tol", type=float, default=180.0, dest="time_tol",
+    ap.add_argument("--time-tol", type=float, default=30.0, dest="time_tol",
                     help="seconds a declared event may differ from a real origin time (default 180)")
-    ap.add_argument("--dist-tol", type=float, default=100.0, dest="dist_tol",
+    ap.add_argument("--match-mag", type=float, default=1.0, dest="match_mag",
+                    help="smallest catalogued quake that counts as a real match (default 1.0)")
+    ap.add_argument("--dist-tol", type=float, default=60.0, dest="dist_tol",
                     help="km a declared proxy may differ from a real epicentre (default 100)")
     ap.add_argument("--json", help="also write the full report to this JSON file")
     args = ap.parse_args()
@@ -144,8 +157,9 @@ def main():
     # ---- precision: are the declared events real? ----
     declared = []
     for ev in events:
-        m = match_real_for_declared(ev, args.time_tol, args.dist_tol)
-        declared.append({"declared": ev, "match": m, "true": m is not None})
+        m = match_real_for_declared(ev, args.time_tol, args.dist_tol, 0.0, args.match_mag)
+        c = match_real_for_declared(ev, args.time_tol, args.dist_tol, 3600.0, args.match_mag)
+        declared.append({"declared": ev, "match": m, "true": m is not None, "chance": c is not None})
     n_true = sum(d["true"] for d in declared)
     n_false = len(declared) - n_true
 
@@ -163,7 +177,9 @@ def main():
     print(f"DECLARED events: {len(declared)}   true detections: {n_true}   false alarms: {n_false}")
     if declared:
         prec = n_true / len(declared)
-        print(f"  precision = {prec:.2f}   false-alarm rate = {n_false / span_days:.2f}/day")
+        chance = sum(d["chance"] for d in declared) / len(declared)
+        print(f"  precision = {prec:.2f}   (chance baseline, same events shifted +1 h: {chance:.2f})"
+              f"   false-alarm rate = {n_false / span_days:.2f}/day")
     for d in declared:
         ev, m = d["declared"], d["match"]
         tag = f"REAL M{m['mag']:.1f} {m['place']} (dt={m['dt']:+.0f}s)" if m else "FALSE ALARM (no USGS match)"
@@ -176,7 +192,8 @@ def main():
         def tier_line(label, subset):
             n = len(subset)
             t = sum(s["true"] for s in subset)
-            prec = f"precision {t / n:.2f}" if n else "precision n/a"
+            ch = sum(s["chance"] for s in subset)
+            prec = f"precision {t / n:.2f} (chance {ch / n:.2f})" if n else "precision n/a"
             print(f"  {label}: {n}   true {t}   false {n - t}   {prec}")
         print()
         tier_line("CONFIRMED (push-eligible)", [d for d in declared if d["declared"].get("confirmed")])
