@@ -20,7 +20,7 @@ pipeline was later removed — `src/eq/` now holds only the seismic catalog/wave
 pivoted to **seismic-waveform deep learning**, where the same CNN/GNN/Transformer architecture
 genuinely works.
 
-## The three models (Detect → Size → Warn)
+## The two models (Detect → Size)
 
 Real numbers, out-of-sample on a **chronological** held-out split. Detect and Size are trained on the
 **19 stations that actually stream live** (`src/eq/network.py`), **2000 → Aug 2026**: 6,243 magnitude
@@ -30,15 +30,17 @@ events (M2.0–7.1) and 50,743 detection windows (34,377 event / 14,304 noise / 
 |------|-------|----------|---------|
 | **Detect** — is it a quake? | CNN+Transformer, AUC **0.9998** (MCC 0.886) | STA/LTA 0.816 | deep wins decisively |
 | **Size** — how big? | multi-station GNN, R² **0.951** (MAE 0.10) | amp+dist 0.886 (MAE 0.16) | deep wins (nearest-1-station ablation → R² 0.808) |
-| **Warn** — how hard will it shake? | EEW ensemble, alert **MCC 0.760** | GMPE-style 0.655 | deep wins (recall 0.76 @ precision 0.82) |
 
-_EEW numbers are from the earlier 10-station run and EEW is not in the live loop (offline evidence)._
+A third, much simpler estimator — the **quick check** — sizes a located quake from the first 4 s of its
+P-wave (classic amplitude scaling, test MAE 0.24) so a provisional alert can go out ~20 s before the full
+magnitude. Full method: `HOW_IT_WORKS.md`.
 
 ```bash
 .venv/Scripts/python scripts/build_dataset.py                       # check -> select -> fetch -> assemble
 .venv/Scripts/python scripts/demo_detect.py --retrain --seeds 5     # detection vs STA/LTA
 .venv/Scripts/python scripts/demo_magnitude.py --retrain --seeds 5  # 5-seed magnitude ensemble
-.venv/Scripts/python scripts/demo_eew.py                            # early-warning ensemble (legacy data)
+.venv/Scripts/python scripts/fit_early_magnitude.py                 # quick-check fit (first 4 s of P)
+.venv/Scripts/python scripts/make_figures.py                        # site evidence figures
 ```
 
 ## Live alert daemon — `scripts/live_watch.py` (engine: `src/eq/pipeline.py`)
@@ -52,8 +54,10 @@ SeedLink (19 CI stations, pinned location codes)  ->  per-station buffers
   ->  PICK the P onset (STA/LTA + AIC, the same picker that aligned the training data)
   ->  LOCATE: >= 3 picks must fit ONE source (grid search) and no healthy nearer station may be silent
         -> CONFIRMED;  1-2 stations -> TENTATIVE (logged, never pushed)
+  ->  QUICK CHECK ~10 s after P (first 4 s of P amplitude + distance): provisional push if >= 3.04
   ->  SIZE once P+25 s has arrived: windows [P-5 s, P+25 s], distances from the LOCATED epicentre
-  ->  PUSH iff confirmed AND M >= 3.0 AND PUSH_ENABLED=1: devices subscribed to a station within 150 km
+  ->  CONFIRM (M >= 3.0) or RETRACT the provisional push, replacing it on the device (same notification
+      tag). All pushes need PUSH_ENABLED=1 and go to devices following a station within 150 km.
 ```
 
 **Why 3 stations:** with 3 picks the location (lat, lon, origin time) is exactly determined, which is the
@@ -91,12 +95,14 @@ MAE 0.12 (the old live path read **≈2.2 units low**), median location error 4.
 React + Vite. `npm run dev`, opens on `localhost:5173`.
 
 - **Hero** with a mouse-reactive synthetic seismograph.
-- **Detect / Size / Warn** as an auto-cycling card carousel (7 s, pause, prev/next, shared "Evidence"
-  disclosures with the demo figures + a technical paragraph for Size and Warn).
+- **Detect / Size** as an auto-cycling card carousel (7 s, pause, prev/next, shared "Evidence"
+  disclosures with the evidence figures and a step-by-step technical rundown).
+- **Where it can see** — interactive coverage map (zoom/pan; more cities and dotted city boundaries as you
+  zoom in) of the 19 stations and where 3+ / 2 stations cover.
 - **Biggest Southern California quakes** — a second carousel cycling Day / Week / Month / Year /
   All time, live from the USGS FDSN catalog, each row linking to its `sms-tsunami-warning.com` page.
-- **Alert me near me** — subscribe to the **sensor stations** nearest you (city/state or "use my
-  location" ranks the 19 stations by distance and auto-picks the nearest 3; toggle any). No coordinates
+- **Alert me near me** — follow a **region** (all its sensors), then turn single sensors off (city/state
+  or "use my location" selects the nearest region). No coordinates
   are stored — only the chosen station codes + your device's push token. Push alerts are **mobile-app
   only**; the daemon does the alerting when a station you follow triggers.
 
@@ -124,7 +130,8 @@ See `DEPLOY.md` for the Oracle A1 deployment (Caddy + systemd) and update proced
   to a few km inside the network, coarser outside it.
 - **Small quakes** (M1–2) are detected and logged; sizes below ~M2 read slightly high (the magnitude set
   starts at M2), which is harmless for the M3 push floor.
-- The "Biggest SoCal quakes" browser uses the **USGS catalog** (metadata, not model output).
+- The "Biggest SoCal quakes" browser lists **USGS catalog** quakes the pipeline could catch (M2+, 3+
+  stations within 100 km) and marks each one caught / seen / not caught against the live event log.
 
 ## Repository layout (current)
 
@@ -137,14 +144,15 @@ src/eq/
   quakecast.py     # USGS catalog (monthly chunks, auto-split, date-ranged cache)
 scripts/
   build_dataset.py      # v2 datasets on the live network (check / select / fetch / assemble)
-  demo_detect.py / demo_magnitude.py / demo_eew.py   # train + evaluate (EEW = legacy data)
+  demo_detect.py / demo_magnitude.py   # train + evaluate
+  fit_early_magnitude.py / make_figures.py   # quick-check fit / site evidence figures
   replay_archive.py     # replay harness: scan / calibrate / run / events / compare-live
   live_watch.py         # LIVE SeedLink daemon (pushes only with PUSH_ENABLED=1)
   select_network.py     # reproduce the station selection (streamable, quiet, spaced, coverage)
   migrate_subscriptions.py  # map retired stations in push_tokens.json to the nearest new one
   crosscheck_events.py  # score the live log vs USGS, with a time-shifted chance baseline
   server.py / push_fcm.py / shaking_model.py / quake_archive.py / nearme_watch.py
-  seismic_train*.py / seismic_eew*.py   # model definitions (+ legacy research mains)
+  seismic_train.py / seismic_train_multi.py   # model definitions (DetectorNet, MultiStationModel)
 app/                    # React + Vite + Capacitor console (web + Android)
 tests/                  # pytest: network, picker/locator, pipeline rules, overfit-one-batch models
 ```

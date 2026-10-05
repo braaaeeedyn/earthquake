@@ -51,7 +51,15 @@ NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
 # gap is only a soft notice. Bump LATEST every release; bump MIN (major/minor) to FORCE an update.
 APP_LATEST_VERSION = "1.01.00"
 APP_MIN_VERSION = "1.01.00"
-NET_RADIUS_KM = 150.0        # a quake within this of any station is "in model range"
+# "Catchable" = where and how big the live pipeline can actually confirm a quake: >= 3 stations within
+# 100 km (the confirmation rule's coverage) and M >= 2.0 (replay harness: ~80 % of in-coverage M2+
+# quakes caught, ~48 % at M1.5-2, ~9 % below). The largest-quakes browser lists only these.
+COVER_KM, COVER_MIN_STATIONS, CATCHABLE_MIN_MAG = 100.0, 3, 2.0
+# Live v2 pipeline start (deploy of the 19-station network). Quakes after this can be marked caught /
+# not caught against data/processed/events.jsonl; earlier ones get no mark.
+LIVE_SINCE_MS = 1791191580000          # 2026-10-05 09:13 UTC
+EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
+_events_cache = {"mtime": None, "recs": []}
 CA_VIEWBOX = "-121.5,36.4,-114.0,32.0"      # Nominatim viewbox: left,top,right,bottom
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 WATCHER = None                               # the live_watch child process (set at startup)
@@ -61,9 +69,49 @@ def _in_ca(lat, lon):
     return CA_BOUNDS[0] <= lat <= CA_BOUNDS[1] and CA_BOUNDS[2] <= lon <= CA_BOUNDS[3]
 
 
-def _in_net_range(lat, lon):
-    """True if within NET_RADIUS_KM of any trained station — i.e. the models can actually see it."""
-    return any(haversine_km(lat, lon, sla, slo) <= NET_RADIUS_KM for sla, slo in NET_COORDS)
+def _catchable(lat, lon):
+    """True if >= COVER_MIN_STATIONS live stations are within COVER_KM -- where the pipeline can confirm."""
+    return sum(haversine_km(lat, lon, sla, slo) <= COVER_KM for sla, slo in NET_COORDS) >= COVER_MIN_STATIONS
+
+
+def _live_events():
+    """Declared events from the live daemon's log (v2 records only), cached by file mtime."""
+    try:
+        m = EVENTS_LOG.stat().st_mtime
+    except OSError:
+        return []
+    if _events_cache["mtime"] != m:
+        recs = []
+        for line in EVENTS_LOG.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("origin") is not None and r.get("lat") is not None:
+                recs.append(r)
+        _events_cache.update(mtime=m, recs=recs)
+    return _events_cache["recs"]
+
+
+def _caught(ev_ms, lat, lon):
+    """Did the live pipeline catch this USGS quake? Match a declared event within 30 s of the origin and
+    60 km of the epicentre. caught = confirmed (located + sized); seen = 1-2 stations only (tentative);
+    missed = after go-live but no match; None = before the live pipeline existed."""
+    if ev_ms is None or ev_ms < LIVE_SINCE_MS:
+        return None
+    t = ev_ms / 1000.0
+    best = None
+    for r in _live_events():
+        if abs(r["origin"] - t) <= 30 and haversine_km(lat, lon, r["lat"], r["lon"]) <= 60:
+            if r.get("confirmed") and (best is None or not best.get("confirmed")):
+                best = r
+            elif best is None:
+                best = r
+    if best is None:
+        return {"status": "missed"}
+    if best.get("confirmed"):
+        return {"status": "caught", "mag": best.get("mag"), "n_stations": best.get("n_stations")}
+    return {"status": "seen"}
 
 
 def _is_ca_place(place):
@@ -98,8 +146,9 @@ def ca_top(window):
     if not w:
         return None
     start, minmag, label = w
+    minmag = max(minmag, CATCHABLE_MIN_MAG)
     lat0, lat1, lon0, lon1 = CA_BOUNDS
-    params = {"format": "geojson", "orderby": "magnitude", "limit": 20,
+    params = {"format": "geojson", "orderby": "magnitude", "limit": 60,
               "starttime": start.strftime("%Y-%m-%dT%H:%M:%S"), "minmagnitude": minmag,
               "minlatitude": lat0, "maxlatitude": lat1, "minlongitude": lon0, "maxlongitude": lon1}
     req = urllib.request.Request(FDSN + "?" + urlencode(params),
@@ -112,12 +161,13 @@ def ca_top(window):
         c = (f.get("geometry") or {}).get("coordinates") or [None, None]
         if p.get("mag") is None or c[0] is None or c[1] is None:
             continue
-        # keep only quakes the models cover: SoCal by place (drops NV/Baja) AND within network range
-        if not _is_ca_place(p.get("place")) or not _in_net_range(c[1], c[0]):
+        # keep only quakes the live pipeline could catch: SoCal by place (drops NV/Baja), inside the
+        # 3-station coverage, M >= CATCHABLE_MIN_MAG (enforced in the query)
+        if not _is_ca_place(p.get("place")) or not _catchable(c[1], c[0]):
             continue
         events.append({"id": f["id"], "mag": float(p["mag"]), "lat": c[1], "lon": c[0],
                        "place": p.get("place") or "California", "url": p.get("url", ""),
-                       "time": p.get("time")})
+                       "time": p.get("time"), "caught": _caught(p.get("time"), c[1], c[0])})
         if len(events) >= 5:
             break
     return {"window": window, "label": label, "events": events}

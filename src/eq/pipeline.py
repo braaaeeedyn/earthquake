@@ -38,6 +38,7 @@ NPTS = 3000
 # margins keep the taper off the 30 s window the model sees (training windows were untapered too).
 ZNE_PRE_S, ZNE_POST_S = 30.0, 6.0
 CONFIG_FILE = Path(__file__).resolve().parents[2] / "data" / "processed" / "v2" / "pipeline_config.json"
+EARLY_FILE = CONFIG_FILE.parent / "early_mag.json"     # fitted by scripts/fit_early_magnitude.py
 
 
 @dataclass
@@ -55,7 +56,8 @@ class Config:
     event_sep_km: float = 100.0    # ... or this much distance from the previous one
     size_radius_km: float = 200.0  # stations used for magnitude (training used <= 200 km)
     size_max_wait: float = 30.0    # s past the ideal sizing time before sizing with what has arrived
-    alert_min_mag: float = 3.0     # felt-shaking push floor
+    alert_min_mag: float = 3.0     # felt-shaking push floor (final, full-window magnitude)
+    early_max_wait: float = 20.0   # s past the ideal quick-check time before giving up on it
     scan_step: float = 2.0         # s between detection windows per station
 
     @classmethod
@@ -133,15 +135,28 @@ class Event:
     mag_spread: float | None = None
     sized_stations: list = field(default_factory=list)
     silent_near: int = 0
+    early_mag: float | None = None        # quick check: first T s of P at the picked stations
+    early_at: float | None = None         # data time the quick check ran
+    sized_at: float | None = None         # data time the full sizing ran
+
+    @property
+    def id(self):
+        return f"{int(self.t0)}_{self.lat:.2f}_{self.lon:.2f}"
 
 
 class Pipeline:
-    def __init__(self, det_model, mag, coords, codes, source, cfg=None, device="cpu", on_event=None):
+    def __init__(self, det_model, mag, coords, codes, source, cfg=None, device="cpu", on_event=None,
+                 on_early=None, early="auto"):
         self.det, self.mag, self.device = det_model, mag, device
         self.coords, self.codes = np.asarray(coords, float), list(codes)
         self.source, self.cfg = source, cfg or Config.load()
         self.loc = locate.Locator(self.coords)
         self.on_event = on_event or (lambda ev: None)
+        self.on_early = on_early or (lambda ev: None)
+        # early: "auto" = load scripts/fit_early_magnitude.py's fit if present; None = no quick check; or a dict
+        self.early = ((json.loads(EARLY_FILE.read_text()) if EARLY_FILE.exists() else None)
+                      if isinstance(early, str) else early)
+        self.early_pending: list[Event] = []
         self.picks: list[Pick] = []
         self.last_pick = {}                           # sta -> time of last pick (refractory)
         self.last_scan = {}                           # sta -> data time of last scanned window end
@@ -209,6 +224,8 @@ class Pipeline:
                         best[s].used = True
                     self.events.append(ev)
                     self.pending.append(ev)
+                    if self.early is not None:
+                        self.early_pending.append(ev)
                     return
         # tentative: picks that waited long enough without forming a confirmed event
         stale = [p for p in free if now - p.t > cfg.tentative_after]
@@ -269,15 +286,58 @@ class Pipeline:
             if mask.sum() < self.cfg.min_stations and now < ideal + self.cfg.size_max_wait:
                 continue
             self.pending.remove(ev)
+            ev.sized_at = now
             if mask.sum():
                 ev.mag, ev.mag_spread = self.mag.predict(X, mask, d.astype(np.float32))
                 ev.sized_stations = [self.codes[i] for i in np.flatnonzero(mask)]
             self.on_event(ev)
 
+    # ------------------------------------------------------------ quick check (preliminary size)
+    def early_ready(self, now):
+        """Preliminary magnitude from only the first T s after P at the PICKED stations (classic early-
+        warning amplitude scaling, fitted by scripts/fit_early_magnitude.py). Runs ~T + 6 s after the
+        third pick -- ~20 s before the full sizing -- and decides whether a first, provisional push goes out."""
+        e, cfg = self.early, self.cfg
+        for ev in list(self.early_pending):
+            picked = sorted(ev.stations, key=lambda i: ev.picks[self.codes[i]])
+            ideal = ev.picks[self.codes[picked[cfg.min_stations - 1]]] + e["T_s"] + ZNE_POST_S
+            if now < ideal:
+                continue
+            d = locate.haversine_km(ev.lat, ev.lon, self.coords[:, 0], self.coords[:, 1])
+            est = []
+            for i in picked:
+                tp = ev.picks[self.codes[i]]
+                end = self.source.end(self.codes[i])
+                if end is None or end < tp + e["T_s"] + ZNE_POST_S:
+                    continue
+                x = self.source.zne(self.codes[i], tp, tp + e["T_s"])
+                if x is None or not np.isfinite(x).all():
+                    continue
+                peak = float(np.abs(x).max()) + 1e-12
+                est.append(e["a"] * np.log10(peak) + e["b"] * np.log10(max(float(d[i]), 1.0)) + e["c"])
+            if len(est) < cfg.min_stations and now < ideal + cfg.early_max_wait:
+                continue
+            self.early_pending.remove(ev)
+            if est:
+                ev.early_mag, ev.early_at = float(np.median(est)), now
+                self.on_early(ev)
+
+    def early_push_eligible(self, ev):
+        """First, provisional push: confirmed location AND the quick check clears the validated threshold."""
+        return bool(self.early is not None and ev.confirmed and ev.early_mag is not None
+                    and ev.early_mag >= self.early["early_min_mag"])
+
+    def advance(self, now):
+        """Everything after detection, in order: associate/locate -> quick check -> full sizing.
+        Live (`step`) and the replay harness both call this, so they can never drift apart."""
+        self.associate(now)
+        if self.early is not None:
+            self.early_ready(now)
+        self.size_ready(now)
+
     def step(self, now, probs_fn=None):
         self.scan(probs_fn)
-        self.associate(now)
-        self.size_ready(now)
+        self.advance(now)
 
     def push_eligible(self, ev):
         return bool(ev.confirmed and ev.mag is not None and ev.mag >= self.cfg.alert_min_mag)

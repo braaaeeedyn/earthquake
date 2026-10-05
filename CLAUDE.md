@@ -68,10 +68,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### What this is
 Deep-learning seismology for **Southern California**, **deployed live at https://seismicsocal.duckdns.org**
-(Oracle Always-Free A1 VM). Three models — **Detect** (is it a quake?), **Size** (magnitude), **Warn**
-(early-warning shaking) — each shown working on real held-out SCEDC waveforms vs the classic seismology
-baseline, plus a **live SeedLink daemon** that detects, picks, locates and sizes quakes on a real-time
-19-station stream and **push-alerts** subscribers. Framed as a *research demonstration*, not an operational warning system.
+(Oracle Always-Free A1 VM). Two models — **Detect** (is it a quake?) and **Size** (magnitude) — plus a
+4-second **quick check**, each shown on held-out SCEDC waveforms vs the classic baseline, run live by a
+SeedLink daemon that detects, picks, locates and sizes quakes on a 19-station stream and push-alerts
+subscribers in two stages (provisional, then confirmed or retracted). Research demonstration, not an
+official warning system. Full method: `HOW_IT_WORKS.md`.
 
 _History: the project began as near-term (7-day) earthquake **forecasting** from geomagnetic (INTERMAGNET)
 data. On real data that thesis came up **null** — superposed-epoch p=0.83, ROC ≈ chance, as the literature
@@ -79,7 +80,7 @@ predicts — and the geomagnetic pipeline was later **removed** (`src/eq/` now h
 catalog/waveform helpers). Work pivoted to seismic-waveform deep learning, where the same
 CNN/GNN/Transformer architecture genuinely works._
 
-### The three models
+### The models
 Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Aug 2026), 5-seed models,
 **chronological 70/15/15** split:
 
@@ -87,12 +88,11 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 |------|--------------|----------------------|----------|
 | **Detect** | CNN → Transformer (single-station, 30 s, 1 Hz HP) | AUC **0.9998**, MCC 0.886 (n=7,303) | STA/LTA 0.816 |
 | **Size** | CNN → **GNN** → Transformer (multi-station, unit-peak + log-amp node feature) | R² **0.951**, MAE 0.10 (n=937, M2–5.2) | amp+dist 0.886 |
-| **Warn (EEW)** | CNN → GNN → Transformer, first ~8 s → future PGV | alert **MCC 0.760** | GMPE-style 0.655 |
+| **Quick check** | median over stations of a·log10(peak vel, first 4 s of P) + b·log10(dist) + c | test MAE 0.24 | — |
 
 - Data: 6,243 magnitude events (M2.0–7.1) / 50,743 detection windows (34,377 event, 14,304 noise,
   2,062 hard negatives = the old daemon's own Sep-22..Oct-5 false declarations). `build_dataset.py`.
 - Size: nearest-1-station ablation R² 0.808; live-like (10 km loc error, 3–6 stations) R² 0.939.
-- **EEW is legacy** (earlier 10-station data, not retrained, not live).
 - **Replay harness (the acceptance test)** on 10 held-out days: 93 % of confirmed events real (chance 0 %),
   5 pushes / 0 false, magnitudes within ±0.13 of catalog, median location error 2.5 km. Event-centric
   (616 test events, live geometry): mag bias +0.06, MAE 0.12, loc err 4.3 km. Old daemon, same days:
@@ -125,9 +125,11 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   `src/eq/pipeline.py` (detect → pick → locate → size → decide, all on data time). `/api/status` includes
   per-station health from `data/processed/live_status.json`. Other routes: `/api/ca`, `/api/geocode`,
   `/api/stations`, `/api/register-push`, `/api/unregister-push`, `/api/version`, `/api/contact`.
-  EEW is NOT live; the push wording uses `shaking_model.py` (mag + distance).
-- **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size/Warn carousel (reads `seismic.json`),
-  biggest-quakes carousel, "Alert me near me" (station subscription, mobile app only).
+  Push wording uses `shaking_model.py` (mag + distance). `/api/ca` lists only catchable quakes and
+  marks each caught / seen / missed against `events.jsonl`.
+- **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size carousel (reads `seismic.json`, evidence
+  figures from `make_figures.py`), interactive coverage map (`Coverage.tsx`, `socal_cities.json`),
+  biggest-quakes carousel with caught badges, "Alert me near me" (region-first, mobile app only).
 
 ### Alerts: station subscription + located, 3-station confirmation (2026-10-05)
 - **Subscribe to STATIONS, not a coordinate.** `push_tokens.json` = `[{token, stations:[codes], name}]`,
@@ -135,7 +137,9 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   station it follows; one message, distance from the located epicentre to its nearest followed station.
 - **CONFIRMED** = >= 3 P picks that one grid-search location fits (RMS <= 1.5 s), at most 1 healthy
   nearer station silent, nearest pick <= 120 km. 1–2 stations → TENTATIVE (logged, never pushed).
-- **Push** iff CONFIRMED and M >= 3.0 and `PUSH_ENABLED=1` (env; default OFF = shadow mode).
+- **Two-stage push** (needs `PUSH_ENABLED=1`; default OFF = shadow mode): (1) provisional push when CONFIRMED
+  and the quick check (first 4 s of P, `early_mag.json`) >= 3.04; (2) after full sizing, a confirmation if
+  M >= 3.0, else a retraction if (1) went out. Both carry the tag `quake-<event id>` so (2) replaces (1).
   Rationale + validation numbers: `data/processed/v2/pipeline_config_reason.json`, README.
 - Coda of a big quake can re-trigger: picks within 120 s / 100 km of a declared event are absorbed
   (costs: an aftershock inside that window is only logged as tentative).
@@ -176,7 +180,5 @@ running Aug-10 models on the old 10-station network — always verify checkpoint
 - **Rebuild the APK** (station-network message in `App.tsx`; needs the Android SDK).
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
-- **Two-stage alert** ("detected, sizing…" then confirm/retract with magnitude) — discussed, not built.
 - **Seed-averaged magnitude R² with a CI** write-up (QuakeOps Phase 2).
-- **Retrain EEW on the live network** and decide whether it belongs in the live alert.
 - QuakeOps (MLflow / gate / drift): see `QUAKEOPS_PLAN.md`, `QUAKEOPS_IMPLEMENTATION.md` (to be re-based on v2).

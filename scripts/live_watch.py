@@ -8,8 +8,11 @@ offline is exactly what runs here):
     -> LOCATE: >= 3 picks that fit one source = CONFIRMED (1-2 stations / poor fit = TENTATIVE, log only)
     -> SIZE once P+25 s has arrived: windows cut [P-5, P+25] per station, distance from the LOCATED
        epicentre (training geometry) -> magnitude ensemble (+ spread)
-    -> PUSH iff CONFIRMED and M >= alert floor and PUSH_ENABLED=1 (env) -- to devices subscribed to
-       any station within the event's reach; one combined message per device
+    -> QUICK CHECK ~10 s after P (first 4 s of P amplitude + located distance): a provisional push
+       ("detected, confirming size") iff confirmed and the quick estimate clears its validated threshold
+    -> FINAL push iff CONFIRMED and full-window M >= alert floor -- replaces the provisional one (same
+       notification tag); a provisional push whose full size falls below the floor is RETRACTED.
+       All pushes need PUSH_ENABLED=1 (env) and go to devices subscribed to a station within reach.
 
 Honesty: SeedLink latency is seconds to tens of seconds and sizing waits for P+25 s, so pushes go out
 roughly 30-60 s after origin: RAPID DETECTION, not pre-arrival early warning. Coverage is strongest
@@ -145,6 +148,7 @@ def log_event(ev: Event, pushed, eligible):
     rec = {
         "t": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "epoch": time.time(),
+        "id": ev.id,
         "origin": round(ev.t0, 2),
         "confirmed": bool(ev.confirmed),
         "n_stations": len(ev.stations),
@@ -154,8 +158,12 @@ def log_event(ev: Event, pushed, eligible):
         "rms_s": None if ev.rms != ev.rms else round(ev.rms, 2),
         "silent_near": ev.silent_near,
         "nearest_station": code, "nearest_km": round(dkm, 1),
+        "early_mag": None if ev.early_mag is None else round(ev.early_mag, 2),
+        "early_pushed": int(getattr(ev, "early_sent", 0)),
+        "early_after_origin_s": None if ev.early_at is None else round(ev.early_at - ev.t0, 1),
         "mag": None if ev.mag is None else round(ev.mag, 2),
         "mag_spread": None if ev.mag_spread is None else round(ev.mag_spread, 2),
+        "sized_after_origin_s": None if ev.sized_at is None else round(ev.sized_at - ev.t0, 1),
         "sized_stations": ev.sized_stations,
         "push_eligible": bool(eligible),
         "pushed": int(pushed),
@@ -168,22 +176,39 @@ def log_event(ev: Event, pushed, eligible):
     return rec
 
 
-def push_message(ev: Event, user_stations):
-    """One message for a device: distance from the LOCATED epicentre to its nearest subscribed sensor."""
+def push_message(ev: Event, user_stations, stage="final"):
+    """Message for one device; distance = located epicentre -> the device's nearest subscribed sensor.
+      stage 'early'   : provisional notice from the quick check (size pending)
+      stage 'final'   : confirmed magnitude (replaces the provisional notice)
+      stage 'retract' : the full sizing came in below the felt floor (replaces the provisional notice)"""
     subs = [s for s in user_stations if s in network.INDEX]
     d = min(float(locate.haversine_km(ev.lat, ev.lon, *network.COORDS[network.INDEX[s]])) for s in subs)
     code, _ = nearest_station(ev.lat, ev.lon)
     region = dict((s[0], s[4]) for s in network.LIVE_NETWORK)[code]
+    if stage == "early":
+        title = f"Earthquake detected ({region}) — confirming size"
+        body = (f"{len(ev.stations)} sensors located a quake about {d:.0f} km from your nearest sensor. "
+                f"Preliminary size M~{ev.early_mag:.1f}; the confirmed magnitude follows in under a minute. "
+                f"Rapid detection, not an official warning.")
+        return title, body
+    if stage == "retract":
+        size = f"M{ev.mag:.1f}" if ev.mag is not None else "a size that could not be confirmed"
+        title = f"Update: smaller quake ({region})"
+        body = (f"The full measurement came in at {size}, below the level people usually feel. "
+                f"You can disregard the earlier alert.")
+        return title, body
     label, _ = shaking_model.describe(shaking_model.estimate_mmi(ev.mag, d))
     shake = " Likely too far to be felt where you are." if label == "Not felt" else f" {label} shaking possible near you."
-    title = f"M{ev.mag:.1f} earthquake detected ({region})"
+    title = f"M{ev.mag:.1f} earthquake confirmed ({region})"
     body = (f"{len(ev.stations)} sensors located it about {d:.0f} km from your nearest sensor.{shake} "
             f"Rapid detection, not an official warning.")
     return title, body
 
 
-def alert_devices(ev: Event, tokens, dry_run):
-    """Push each device subscribed to any station within ALERT_REACH_KM of the epicentre, once."""
+def alert_devices(ev: Event, tokens, dry_run, stage="final"):
+    """Push each device subscribed to any station within ALERT_REACH_KM of the epicentre, once per
+    stage. Every stage of one event carries the same notification tag, so later stages REPLACE earlier
+    ones on the device instead of stacking."""
     d = locate.haversine_km(ev.lat, ev.lon, network.COORDS[:, 0], network.COORDS[:, 1])
     reach = {network.CODES[i] for i in np.flatnonzero(d <= ALERT_REACH_KM)}
     sent = 0
@@ -191,15 +216,30 @@ def alert_devices(ev: Event, tokens, dry_run):
         subs = [s for s in t.get("stations", []) if s in network.INDEX]
         if not subs or reach.isdisjoint(subs):
             continue
-        title, body = push_message(ev, subs)
-        if push_fcm.send_push(t["token"], title, body, dry_run):
+        title, body = push_message(ev, subs, stage)
+        if push_fcm.send_push(t["token"], title, body, dry_run, tag=f"quake-{ev.id}"):
             sent += 1
     return sent
 
 
+def handle_early(pipe, ev, dry_run, push_enabled):
+    """Stage 1: the quick check ran. Provisional push iff confirmed location and early M >= threshold."""
+    ev.early_sent = 0
+    if pipe.early_push_eligible(ev) and push_enabled:
+        ev.early_sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "early")
+    print(f"[EARLY] {ev.id} quick-check M~{ev.early_mag:.1f} eligible={pipe.early_push_eligible(ev)} "
+          f"pushed={ev.early_sent}", flush=True)
+
+
 def handle_event(pipe, ev, dry_run, push_enabled):
+    """Stage 2: full sizing done (or a tentative event). Confirm with the magnitude, or retract a
+    provisional notice that turned out below the felt floor."""
     eligible = pipe.push_eligible(ev)
-    sent = alert_devices(ev, push_fcm.load_tokens(), dry_run) if (eligible and push_enabled) else 0
+    sent = 0
+    if push_enabled and eligible:
+        sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "final")
+    elif push_enabled and getattr(ev, "early_sent", 0):
+        sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "retract")
     log_event(ev, sent, eligible)
     tag = "EVENT" if ev.confirmed else "TENTATIVE"
     size = f"M{ev.mag:.1f}±{ev.mag_spread:.1f}" if ev.mag is not None else "unsized"
@@ -221,7 +261,10 @@ def run_live(args):
     src = LiveSource(inv)
     push_enabled = os.environ.get("PUSH_ENABLED", "0") == "1"
     pipe = Pipeline(det, mag, network.COORDS, network.CODES, src, cfg,
-                    on_event=lambda ev: handle_event(pipe, ev, args.dry_run, push_enabled))
+                    on_event=lambda ev: handle_event(pipe, ev, args.dry_run, push_enabled),
+                    on_early=lambda ev: handle_early(pipe, ev, args.dry_run, push_enabled))
+    if pipe.early is None:
+        print("no early_mag.json -> single-stage pushes (final magnitude only)", flush=True)
     print(f"config {cfg}\npush {'ENABLED' if push_enabled else 'DISABLED (shadow mode)'}", flush=True)
 
     def loop():
@@ -310,6 +353,18 @@ def selftest(args):
     assert alert_devices(ev, [{"token": "x", "stations": far_only}], dry_run=True) == 0
     print(f"[selftest] message: {title!r} / {body!r}")
     print("[selftest] devices subscribed only to far stations are not alerted")
+
+    early = {"T_s": 4.0, "a": 0.7, "b": 1.5, "c": 4.0, "early_min_mag": 3.04}
+    pipe3 = Pipeline(None, None, network.COORDS, network.CODES, src, cfg, early=early)
+    ev.early_mag = 3.4
+    assert pipe3.early_push_eligible(ev)
+    ev.early_mag = 2.8
+    assert not pipe3.early_push_eligible(ev)
+    ev.early_mag, ev.mag = 3.4, 2.6
+    t1, _ = push_message(ev, [network.CODES[int(near[0])]], "early")
+    t2, b2 = push_message(ev, [network.CODES[int(near[0])]], "retract")
+    assert "confirming" in t1 and "disregard" in b2
+    print(f"[selftest] two-stage: provisional {t1!r} -> retraction {t2!r} (same notification tag)")
 
 
 def main():

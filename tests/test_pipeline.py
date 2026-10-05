@@ -84,3 +84,40 @@ def test_push_floor():
     assert not p.push_eligible(ev)
     ev.mag = None
     assert not p.push_eligible(ev)
+
+
+EARLY = {"T_s": 4.0, "a": 0.7, "b": 1.5, "c": 4.0, "early_min_mag": 3.04}
+
+
+class AmpSrc(Src):
+    """Every station shows the same peak velocity in its quick-check window."""
+    def __init__(self, now, peak):
+        super().__init__(now)
+        self.peak = peak
+
+    def zne(self, c, t1, t2):
+        x = np.zeros((3, int(round((t2 - t1) * 100))))
+        x[0, 10] = self.peak
+        return x
+
+
+def test_quick_check_runs_after_P_plus_T_and_gates_the_first_push():
+    src = AmpSrc(0.0, 1e-4)
+    p = Pipeline(None, None, network.COORDS, network.CODES, src, Config(), early=EARLY)
+    _picks(p, 34.1, -117.4, 0.0, 4)
+    p.associate(40.0)
+    ev = p.events[-1]
+    third = sorted(ev.picks.values())[2]
+    src.now = third + EARLY["T_s"]                      # too early: needs the +6 s response margin
+    p.early_ready(src.now)
+    assert ev.early_mag is None
+    src.now = third + EARLY["T_s"] + 6.5
+    p.early_ready(src.now)
+    assert ev.early_mag is not None and p.early_push_eligible(ev) == (ev.early_mag >= EARLY["early_min_mag"])
+
+
+def test_no_quick_check_without_a_fit():
+    p = Pipeline(None, None, network.COORDS, network.CODES, Src(), Config(), early=None)
+    _picks(p, 34.1, -117.4, 0.0, 4)
+    p.advance(40.0)
+    assert p.events and not p.early_pending and not p.early_push_eligible(p.events[-1])

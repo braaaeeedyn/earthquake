@@ -1,6 +1,6 @@
 {
   "project": "Seismic deep learning",
-  "model": "CNN + GNN + Transformer (shared backbone)",
+  "model": "CNN + Transformer (detect) · CNN + GNN + Transformer (size)",
   "generated_at": "2026-10-05",
   "dataset": {
     "events": 6243,
@@ -29,26 +29,6 @@
       "baseline_name": "amp + distance",
       "winner": "deep",
       "desc": "Network magnitude from multi-station 3-component traces aligned on picked P arrivals, with distances from the located epicentre. 5-seed ensemble R² 0.951 (MAE 0.10) on 937 held-out events (M2-5.2) vs 0.886 for amplitude + distance; in live-like conditions (10 km location error, 3-6 stations) R² 0.939."
-    },
-    {
-      "key": "eew_reg",
-      "name": "Early warning · shaking level",
-      "metric": "R²",
-      "deep": 0.728,
-      "baseline": 0.72,
-      "baseline_name": "early-amp + dist",
-      "winner": "tie",
-      "desc": "From the first 8 seconds of P-wave, predict the peak ground velocity that arrives later. Ties the physics baseline on the continuous value. (EEW is offline evidence from the earlier 10-station dataset; not yet retrained on the live network.)"
-    },
-    {
-      "key": "eew_alert",
-      "name": "Early warning · alert",
-      "metric": "MCC",
-      "deep": 0.76,
-      "baseline": 0.655,
-      "baseline_name": "GMPE-style",
-      "winner": "deep",
-      "desc": "Will shaking exceed a notable threshold? With the alert trigger tuned on validation for recall, the deep model catches 76% of strong-shaking events (up from 65%) at 82% precision. The baseline reaches similar recall only by false-alarming twice as often, so on balanced alert quality (MCC) the deep model wins 0.76 vs 0.66. (EEW is offline evidence from the earlier 10-station dataset; not yet retrained on the live network.)"
     }
   ],
   "stations": [
@@ -72,5 +52,5 @@
     "SNCC",
     "CIA"
   ],
-  "disclaimer": "Research prototype on real California network data, not an operational warning system. The project's original geomagnetic earthquake-precursor forecast was retired after honest validation showed no out-of-sample signal; it pivoted to seismic-waveform deep learning, where the same architecture works. Short-term earthquake prediction (whether one will occur) remains unsolved - this does detection, characterization, and seconds-ahead shaking estimation."
+  "disclaimer": "Research prototype on real Southern California network data, not an official warning system. It detects, locates and sizes earthquakes after they begin (rapid detection); predicting whether an earthquake will occur remains unsolved."
 }

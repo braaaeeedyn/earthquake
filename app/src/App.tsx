@@ -14,22 +14,31 @@ type State =
   | { status: 'error'; message: string }
   | { status: 'ready'; data: Seismic }
 
-// Detect -> Size -> Warn is a real pipeline, so the numbering carries meaning.
-const ROWS = [
+// Detect -> Size is the live pipeline's order, so the numbering carries meaning.
+const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
-    n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detection_demo.png',
-    desc: 'Give it 30 seconds of shaking recorded by a sensor and it decides whether a real earthquake is happening or whether it is just ordinary background noise like traffic or wind. It was trained on the 19 stations that actually stream live, including the noise that used to fool the old version, and on held-out data it is right more than 99% of the time no matter where in the window the quake begins.',
-    tech: 'Technical: single-station CNN → transformer on 30 s vertical windows (1 Hz high-pass, unit-std), trained with the P onset placed anywhere 1–25 s into the window and with hard negatives mined from the live system’s own false alarms. Chronological held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886, versus STA/LTA AUC 0.816. Live, an event is only confirmed when at least 3 stations’ P-wave picks fit one located source.',
+    n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
+    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 20 real days it caught about 8 in 10 quakes of M2 and up, with no false alerts.',
+    tech: [
+      'Input: the vertical channel of each station, 30 s at 100 Hz, causally band-limited (1 Hz high-pass, 18 Hz low-pass) and scaled to unit variance — the same preparation in training and live.',
+      'Model: 4 strided 1-D convolutions (16→64 channels) turn the trace into a feature sequence; a 2-layer Transformer encoder reads it and a linear head gives P(earthquake). Selected from 5 seeds on validation AUC.',
+      'Training data: 34,377 event windows (P-wave placed anywhere 1–25 s into the window), 14,304 noise windows from all hours with no catalogued M1+ quake nearby, and 2,062 hard negatives — the previous live system’s own false alarms. Chronological split, 2000–2026.',
+      'Held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886; the classic STA/LTA trigger on the same input reaches AUC 0.816.',
+      'Live: a window above 0.6 triggers a P-wave pick (STA/LTA onset refined by an Akaike picker). Picks from ≥3 stations are located by grid search; the event is confirmed only if one source fits them (RMS ≤ 1.5 s) and no working station closer to it stayed silent.',
+      'Replay of the exact live code on 20 archived days: located events within 2.5 km (median); 81–86 % of in-coverage M2+ quakes caught; 0 false push alerts.',
+    ],
   },
   {
-    n: '02', kicker: 'Size', key: 'magnitude', q: 'How big is it?', figure: 'magnitude_demo.png',
-    desc: 'It estimates the size, or magnitude, of the earthquake by reading many sensor stations at once, after first locating where the quake started. Combining the network is what makes the estimate sharp: on held-out quakes it is typically within about 0.1 of the official magnitude.',
-    tech: 'Technical: network-magnitude regression. Each station’s 3-component window, cut 5 s before its picked P arrival, feeds a CNN (waveform shape, unit-peak normalized); its log peak velocity and distance from the located epicentre join it as graph-node features; a graph convolution across the 19-station network and a transformer then produce the magnitude. On 6,243 SoCal events (M2–7.1, 2000–2026), the 5-seed ensemble scores R² 0.951 (MAE 0.10) on the chronological test split versus an amplitude + distance baseline at R² 0.886 (MAE 0.16); the nearest-single-station ablation drops to R² 0.808.',
-  },
-  {
-    n: '03', kicker: 'Warn', key: 'eew_alert', q: 'How hard will it shake?', figure: 'eew_demo.png',
-    desc: 'From just the first 8 seconds of an earthquake, it predicts how hard the ground will shake a few moments later, before the strong shaking reaches you, and decides whether to sound an alarm. This early warning can give people seconds to take cover. It correctly warns about 76% of the truly dangerous, strong-shaking earthquakes, and to catch that many the older method sets off twice as many false alarms.',
-    tech: 'Technical: early-warning PGV regression from the first 8 s (≈5 s pre-P + 3 s early P-wave). A per-station CNN → graph convolution → transformer predicts future log₁₀(peak ground velocity), reported as a 5-model seed ensemble. The alert trigger is tuned on a chronological validation split with a recall-weighted F2 objective (the "strong shaking" definition is fixed at the train 70th-percentile PGV). Held-out: recall 0.76, precision 0.82, MCC +0.760 versus a GMPE-style baseline MCC +0.655; continuous R² 0.728 ≈ baseline 0.720.',
+    n: '02', kicker: 'Size', key: 'magnitude', q: 'How big is it?', figure: 'size_evidence.png',
+    desc: 'Once a quake is located, the size model reads 30 seconds from every nearby sensor — lined up on the moment the P-wave arrived at each one — and combines them into one magnitude. On held-out quakes it is typically within 0.1 of the official magnitude, clearly better than the classic amplitude-and-distance formula. A faster 4-second check sends the first alert; this full estimate confirms it.',
+    tech: [
+      'Input: for every working station within 200 km of the located epicentre, a 3-component velocity window from 5 s before its P arrival to 25 s after (instrument response removed, 18 Hz low-pass).',
+      'Model: each window, scaled to unit peak, goes through a 1-D CNN (wave shape); its log peak velocity and log distance from the epicentre join it as graph-node features; two graph-convolution layers over the 19-station network (Gaussian distance weights, 150 km cut-off) and a Transformer mix the stations; the pooled vector plus 4 network amplitude/distance statistics give the magnitude. Average of 5 seeds.',
+      'Training data: 6,243 catalogued SoCal quakes (M2.0–7.1, 2000–2026), with augmentation for live conditions — ±8 km epicentre jitter, ±0.5 s pick jitter, and only the nearest 3–n stations or random station drop-out.',
+      'Held-out test (937 quakes, 2022–2026): R² 0.951, MAE 0.10; amplitude + distance baseline R² 0.886, MAE 0.16; nearest single station only MAE 0.20. Live-like (10 km location error, 3–6 stations): MAE 0.11.',
+      'Quick check (first alert): median over the picked stations of a·log10(peak velocity in the first 4 s of P) + b·log10(distance) + c, fitted on the training quakes. Test MAE 0.24; 93 % of M3+ quakes pass its validated threshold, 1 % of quakes under M2.5 do.',
+      'Push rule: provisional alert if the quick check ≥ 3.04; the full estimate then confirms (M ≥ 3.0) or retracts it, replacing the first notification. Replay: provisional alerts ~35 s after origin, confirmations ~55 s.',
+    ],
   },
 ]
 
@@ -383,8 +392,8 @@ function Console({ data }: { data: Seismic }) {
         <p className="eyebrow">Earthquake ML · Southern California</p>
         <h1>SeismicSoCal</h1>
         <p className="hero-sub">
-          Three deep models on real held-out waveforms, each tested against the classic
-          seismology baseline.
+          Two deep models running on a live 19-station stream, each tested on held-out
+          waveforms against the classic seismology baseline.
         </p>
         <Trace />
         <div className="meta">
@@ -406,7 +415,7 @@ function Console({ data }: { data: Seismic }) {
   )
 }
 
-// The Detect -> Size -> Warn sequence as an auto-cycling carousel.
+// The Detect -> Size sequence as an auto-cycling carousel.
 // Tracks the previous index so the outgoing card slides left and the incoming enters from the right.
 function Carousel({ data }: { data: Seismic }) {
   const byKey = Object.fromEntries(data.tasks.map((t) => [t.key, t]))
@@ -416,7 +425,7 @@ function Carousel({ data }: { data: Seismic }) {
   const [idx, setIdx] = useState<{ active: number; prev: number; dir: 'next' | 'prev' }>({ active: 0, prev: 0, dir: 'next' })
   const [paused, setPaused] = useState(false)
   const [remaining, setRemaining] = useState(CYCLE)
-  const [evOpen, setEvOpen] = useState(false) // Evidence is shared: one toggle opens all three
+  const [evOpen, setEvOpen] = useState(false) // Evidence is shared: one toggle opens both cards
 
   // One 1-second ticker drives both the countdown display and the 7s auto-advance.
   useEffect(() => {
@@ -441,7 +450,7 @@ function Carousel({ data }: { data: Seismic }) {
     i === idx.active ? 'is-active' : i === idx.prev ? 'is-leaving' : 'is-rest'
 
   return (
-    <section className="carousel" aria-roledescription="carousel" aria-label="Detect, Size, Warn">
+    <section className="carousel" aria-roledescription="carousel" aria-label="Detect, Size">
       <div className="carousel-tabs" role="tablist">
         {rows.map((r, i) => (
           <button
@@ -536,7 +545,7 @@ function Evidence({
 }: {
   figure: string
   kicker: string
-  tech?: string
+  tech?: string[]
   open: boolean
   onToggle: () => void
 }) {
@@ -547,8 +556,13 @@ function Evidence({
       </button>
       <div className="evidence-wrap">
         <div className="evidence-inner">
-          <img src={figure} alt={`${kicker} - deep model vs baseline on held-out data`} />
-          {tech && <p className="evidence-tech">{tech}</p>}
+          <img src={figure} alt={`${kicker} - evidence on held-out data and replayed live days`} />
+          {tech && tech.length > 0 && (
+            <div className="evidence-tech">
+              <p className="evidence-tech-h">How it gets the result</p>
+              <ol>{tech.map((t, k) => <li key={k}>{t}</li>)}</ol>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -670,11 +684,25 @@ function QuakeList({ title, events }: { title: string; events?: UsgsEvent[] }) {
               <span className="place">{e.place}</span>
               <span className="r">{fmtDate(e.time)}</span>
             </div>
+            {e.caught && <CaughtBadge c={e.caught} />}
           </li>
         ))}
       </ul>
     </div>
   )
+}
+
+// How the live pipeline did on this USGS quake (matched within 30 s and 60 km of its origin).
+function CaughtBadge({ c }: { c: NonNullable<UsgsEvent['caught']> }) {
+  if (c.status === 'caught')
+    return (
+      <p className="caught caught-yes">
+        Caught by our model{c.mag != null ? ` · estimated M${c.mag.toFixed(1)}` : ''}
+        {c.n_stations ? ` · ${c.n_stations} sensors` : ''}
+      </p>
+    )
+  if (c.status === 'seen') return <p className="caught caught-seen">Seen by our sensors · not confirmed</p>
+  return <p className="caught caught-no">Not caught by our model</p>
 }
 
 const CA_WINDOWS = [
@@ -728,7 +756,10 @@ function CaLargest() {
         <div>
           <p className="eyebrow">Largest earthquakes</p>
           <h2>Biggest Southern California quakes</h2>
-          <p className="source-note">Only quakes within range of our SoCal sensor network · Source: USGS</p>
+          <p className="source-note">
+            Only quakes our live pipeline can catch: M2+ with 3+ sensors within 100 km · Source: USGS ·
+            each is checked against what our models caught in real time
+          </p>
         </div>
       </div>
       <div className="carousel-tabs" role="tablist">
@@ -784,9 +815,8 @@ function CaLargest() {
   )
 }
 
-// Auto-selection rule for "use my location": pick the nearest few stations, but never one farther
-// than the cap (roughly a M3.5's felt distance — a station beyond it can't feel your local quakes).
-const NEAR_TOP_N = 3
+// "Use my location" selects the nearest REGION (all of its sensors), but only if one of its sensors is
+// within this cap (roughly an M3.5's felt distance) — farther than that, the user picks manually.
 const NEAR_CAP_KM = 150
 
 // Great-circle distance in km (haversine), for ranking stations by how close they are to the user.
@@ -797,6 +827,13 @@ function kmBetween(aLat: number, aLon: number, bLat: number, bLon: number) {
   const dLon = rad(bLon - aLon)
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLon / 2) ** 2
   return 2 * R * Math.asin(Math.sqrt(s))
+}
+
+// Stations grouped by region, in the network's own order (src/eq/network.py via /api/stations).
+function regionsOf(stations: Station[]): Map<string, Station[]> {
+  const m = new Map<string, Station[]>()
+  for (const st of stations) m.set(st.region, [...(m.get(st.region) ?? []), st])
+  return m
 }
 
 // Are two sets of station codes identical? Used to tell a live subscription from a pending edit.
@@ -819,6 +856,7 @@ function NearMe() {
   const [city, setCity] = useState('')
   const [stateName, setStateName] = useState('CA')
   const [searching, setSearching] = useState(false)
+  const [opened, setOpened] = useState<Set<string>>(new Set())   // regions the user expanded by hand
 
   const subscribed = subscribedSet.size > 0                    // subscribed iff we track live stations
   const dirty = !sameSet(selected, subscribedSet)              // selection differs from what's live
@@ -845,20 +883,19 @@ function NearMe() {
   // only the chosen station codes are sent to the server.
   const applyLocation = (lat: number, lon: number) => {
     const d: Record<string, number> = {}
-    for (const s of stations) d[s.code] = kmBetween(lat, lon, s.lat, s.lon)
-    const pick = [...stations]
-      .sort((a, b) => d[a.code] - d[b.code])
-      .filter((s) => d[s.code] <= NEAR_CAP_KM)
-      .slice(0, NEAR_TOP_N)
-      .map((s) => s.code)
+    for (const st of stations) d[st.code] = kmBetween(lat, lon, st.lat, st.lon)
     setDist(d)
     setLocated(true)
-    setSelected(new Set(pick))
-    setMsg(
-      pick.length
-        ? { kind: 'ok', text: `Auto-selected the ${pick.length} nearest sensor${pick.length > 1 ? 's' : ''} within ${NEAR_CAP_KM} km. Tap any sensor below to add or remove it.` }
-        : { kind: 'err', text: `No sensor within ${NEAR_CAP_KM} km — you may be outside the covered region. You can still pick one manually below.` },
-    )
+    const best = [...regionsOf(stations)].map(([r, sts]) => [r, Math.min(...sts.map((x) => d[x.code])), sts] as const)
+      .sort((a, b) => a[1] - b[1])[0]
+    if (best && best[1] <= NEAR_CAP_KM) {
+      const [r, km, sts] = best
+      setSelected(new Set(sts.map((x) => x.code)))
+      setOpened(new Set([r]))
+      setMsg({ kind: 'ok', text: `Selected ${r} — its ${sts.length} sensors (nearest ${Math.round(km)} km from you). Turn individual sensors off below, or add other regions.` })
+    } else {
+      setMsg({ kind: 'err', text: `No sensor within ${NEAR_CAP_KM} km — you may be outside the covered region. You can still pick a region below.` })
+    }
   }
 
   const searchLocation = async () => {
@@ -889,6 +926,29 @@ function NearMe() {
     const next = new Set(prev)
     if (next.has(code)) next.delete(code)
     else next.add(code)
+    return next
+  })
+
+  // Tapping a region follows ALL of its sensors (and opens it so single sensors can be turned off);
+  // tapping a region that has any sensor selected clears the whole region.
+  const toggleRegion = (region: string, codes: string[]) => {
+    const any = codes.some((c) => selected.has(c))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      codes.forEach((c) => (any ? next.delete(c) : next.add(c)))
+      return next
+    })
+    setOpened((prev) => {
+      const next = new Set(prev)
+      if (any) next.delete(region)
+      else next.add(region)
+      return next
+    })
+  }
+  const toggleOpen = (region: string) => setOpened((prev) => {
+    const next = new Set(prev)
+    if (next.has(region)) next.delete(region)
+    else next.add(region)
     return next
   })
 
@@ -938,17 +998,22 @@ function NearMe() {
     }
   }
 
-  // Once located, order sensors nearest-first so the user sees their distances at a glance.
-  const rows = located ? [...stations].sort((a, b) => dist[a.code] - dist[b.code]) : stations
+  // Regions (from the network's station list), nearest-first once located.
+  const regions = [...regionsOf(stations)]
+  if (located) {
+    const near = (sts: Station[]) => Math.min(...sts.map((x) => dist[x.code] ?? Infinity))
+    regions.sort((a, b) => near(a[1]) - near(b[1]))
+  }
 
   return (
     <section className="nearme">
       <p className="eyebrow">Alerts</p>
       <h2>Alert me near me</h2>
       <p className="nearme-lede">
-        A model watches the live Southern California seismic stream and pushes you a notification when
-        a sensor you follow detects a quake. You subscribe to individual sensor stations — pick the
-        ones near you. This is rapid detection, not an official warning.
+        The models watch a live 19-sensor Southern California stream. When a quake is located near a
+        sensor you follow, you get a first notice within seconds and a confirmed magnitude shortly after
+        (or a retraction if it turns out too small to feel). Follow a region, then fine-tune its sensors.
+        This is rapid detection, not an official warning.
         {!isNativeApp() && ' Alerts are available in the SeismicSoCal app.'}
       </p>
 
@@ -1000,33 +1065,55 @@ function NearMe() {
 
           <fieldset className="station-picker">
             <legend>
-              Sensor stations{located ? ' — distance from you' : ''}
-              <span className="picker-hint">
-                {located ? ' · tap to add or remove' : ' · locate yourself to see distances'}
-              </span>
+              Regions{located ? ' — distance from you' : ''}
+              <span className="picker-hint"> · tap a region to follow all its sensors, then turn single sensors off</span>
             </legend>
-            <ul className="station-list">
-              {rows.map((s) => {
-                const on = selected.has(s.code)
-                const live = subscribedSet.has(s.code)   // currently subscribed on the server
-                const km = dist[s.code]
-                // Live subscription -> greyed "Subscribed"; a fresh pick -> black "Selected"; else off.
-                const cls = live && on ? ' subscribed' : on ? ' on' : ''
-                const label = live && on ? 'Subscribed' : on ? 'Selected' : 'Off'
+            <ul className="region-list">
+              {regions.map(([region, sts]) => {
+                const codes = sts.map((x) => x.code)
+                const nSel = codes.filter((c) => selected.has(c)).length
+                const nLive = codes.filter((c) => selected.has(c) && subscribedSet.has(c)).length
+                const expanded = nSel > 0 || opened.has(region)
+                const near = located ? Math.min(...codes.map((c) => dist[c] ?? Infinity)) : undefined
+                const cls = nSel && nLive === nSel ? ' subscribed' : nSel ? ' on' : ''
+                const label = !nSel ? 'Off' : nLive === nSel ? `Subscribed ${nSel}/${codes.length}` : `Selected ${nSel}/${codes.length}`
                 return (
-                  <li key={s.code}>
-                    <button
-                      type="button"
-                      className={`station-row${cls}`}
-                      aria-pressed={on}
-                      onClick={() => toggle(s.code)}
-                    >
-                      <span className="station-code">{s.code}</span>
-                      <span className="station-dist">
-                        {located && km !== undefined ? `${Math.round(km)} km` : '—'}
-                      </span>
-                      <span className="station-toggle">{label}</span>
-                    </button>
+                  <li key={region} className="region-item">
+                    <div className="region-head">
+                      <button type="button" className={`station-row region-row${cls}`} aria-pressed={nSel > 0}
+                        onClick={() => toggleRegion(region, codes)}>
+                        <span className="region-name">{region}</span>
+                        <span className="station-dist">
+                          {codes.length} sensors{near !== undefined && isFinite(near) ? ` · ${Math.round(near)} km` : ''}
+                        </span>
+                        <span className="station-toggle">{label}</span>
+                      </button>
+                      <button type="button" className="region-caret" aria-expanded={expanded}
+                        aria-label={`${expanded ? 'Hide' : 'Show'} ${region} sensors`} onClick={() => toggleOpen(region)}
+                        disabled={nSel > 0}>
+                        {expanded ? '−' : '+'}
+                      </button>
+                    </div>
+                    {expanded && (
+                      <ul className="station-list region-sensors">
+                        {sts.map((st) => {
+                          const on = selected.has(st.code)
+                          const live = subscribedSet.has(st.code)
+                          const km = dist[st.code]
+                          const scls = live && on ? ' subscribed' : on ? ' on' : ''
+                          const slabel = live && on ? 'Subscribed' : on ? 'Selected' : 'Off'
+                          return (
+                            <li key={st.code}>
+                              <button type="button" className={`station-row${scls}`} aria-pressed={on} onClick={() => toggle(st.code)}>
+                                <span className="station-code">{st.code}</span>
+                                <span className="station-dist">{located && km !== undefined ? `${Math.round(km)} km` : '—'}</span>
+                                <span className="station-toggle">{slabel}</span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
                   </li>
                 )
               })}

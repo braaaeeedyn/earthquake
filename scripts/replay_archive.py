@@ -170,7 +170,8 @@ class ArchiveSource:
 def run_period(start, end, cfg, mag, inv):
     src = ArchiveSource(inv)
     events = []
-    pipe = Pipeline(None, mag, network.COORDS, network.CODES, src, cfg, on_event=events.append)
+    pipe = Pipeline(None, mag, network.COORDS, network.CODES, src, cfg, on_event=events.append,
+                    early=None if mag is None else "auto")
     for h in pd.date_range(start, end, freq="h", inclusive="left"):
         fp = CACHE / f"{h:%Y%m%dT%H}.npz"
         if not fp.exists():
@@ -191,8 +192,7 @@ def run_period(start, end, cfg, mag, inv):
                     pipe.accept_pick(i, wend[j], None if np.isnan(lag[j]) else float(lag[j]), float(snr[j]), p[j])
                 j += 1
             src.now = t
-            pipe.associate(t)
-            pipe.size_ready(t)
+            pipe.advance(t)
     return events, pipe
 
 
@@ -200,7 +200,11 @@ def ev_record(ev, pipe):
     return {"epoch": ev.declared_at, "origin": ev.t0, "confirmed": ev.confirmed, "lat": ev.lat, "lon": ev.lon,
             "rms": ev.rms, "n_stations": len(ev.stations), "stations": [network.CODES[i] for i in ev.stations],
             "mag": ev.mag, "mag_spread": ev.mag_spread, "silent_near": ev.silent_near,
-            "push_eligible": pipe.push_eligible(ev) if pipe is not None else None}
+            "push_eligible": pipe.push_eligible(ev) if pipe is not None else None,
+            "early_mag": ev.early_mag,
+            "early_push": pipe.early_push_eligible(ev) if pipe is not None else None,
+            "early_after_origin_s": None if ev.early_at is None else ev.early_at - ev.t0,
+            "sized_after_origin_s": None if ev.sized_at is None else ev.sized_at - ev.t0}
 
 
 def match(cat, t, lat, lon, dt=20.0, dkm=60.0):
@@ -249,6 +253,17 @@ def score(recs, cat, rngs, floor, tkey="origin", latkey="lat", lonkey="lon", lab
     q = q[coverage_mask(q.lat.values, q.lon.values)]
     caught = [any(abs(r[tkey] - e) <= 20 and locate.haversine_km(r[latkey], r[lonkey], la, lo) <= 60 for r in conf)
               for e, la, lo in zip(q.epoch, q.lat, q.lon)]
+    early = [r for r in conf if r.get("early_push")]
+    if early or any("early_push" in r for r in recs):
+        em = [match(cat, r[tkey], r[latkey], r[lonkey]) for r in early]
+        out["early_push"] = len(early)
+        out["early_push_real_M2.5+"] = sum(1 for m in em if m and m["mag"] >= floor - 0.5)
+        out["early_retracted"] = sum(1 for r in early if not r.get("push_eligible"))
+        out["final_push_without_early"] = sum(1 for r in push if not r.get("early_push"))
+        lat_e = [r["early_after_origin_s"] for r in early if r.get("early_after_origin_s") is not None]
+        lat_f = [r["sized_after_origin_s"] for r in push if r.get("sized_after_origin_s") is not None]
+        out["early_push_s_after_origin_median"] = round(float(np.median(lat_e)), 1) if lat_e else None
+        out["final_push_s_after_origin_median"] = round(float(np.median(lat_f)), 1) if lat_f else None
     out["m3_in_coverage"] = len(q)
     out["m3_recall"] = round(float(np.mean(caught)), 3) if len(q) else None
     return out

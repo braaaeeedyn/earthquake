@@ -19,6 +19,9 @@ export interface UsgsEvent {
   place: string
   url: string
   time?: number
+  // Live-pipeline match (biggest-quakes browser only): caught = located + sized by our models,
+  // seen = 1-2 sensors only, missed = after go-live but not caught, null = before the live pipeline.
+  caught?: { status: 'caught' | 'seen' | 'missed'; mag?: number | null; n_stations?: number } | null
 }
 
 // One day's top-5 largest quakes, worldwide and in the California "area".
@@ -33,6 +36,7 @@ export interface Station {
   code: string
   lat: number
   lon: number
+  region: string
 }
 
 // The live station network (src/eq/network.py). Used to show the user their distance to each station so they can

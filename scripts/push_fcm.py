@@ -67,9 +67,12 @@ def _access_token():
     return _creds.token, _creds.project_id
 
 
-def send_push(token, title, body, dry_run=False):
+def send_push(token, title, body, dry_run=False, tag=None):
     """Push one notification to one device token via FCM HTTP v1.
 
+    `tag`: pushes with the same tag REPLACE each other in the Android notification tray -- the live
+    daemon tags both stages of an event with its id, so the confirmation (or retraction) overwrites
+    the provisional "detected, sizing..." notice instead of stacking under it.
     dry_run or missing service-account key -> print instead of send (returns False so callers
     can count real sends). Mirrors nearme_watch.send_email's fail-soft behaviour.
     """
@@ -83,7 +86,7 @@ def send_push(token, title, body, dry_run=False):
     msg = {"message": {
         "token": token,
         "notification": {"title": title, "body": body},
-        "android": {"priority": "high"},
+        "android": {"priority": "high", **({"notification": {"tag": tag}} if tag else {})},
     }}
     r = requests.post(url, headers={"Authorization": f"Bearer {access}",
                                     "Content-Type": "application/json"},
