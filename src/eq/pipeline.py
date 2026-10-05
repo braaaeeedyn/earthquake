@@ -33,6 +33,10 @@ from . import locate
 
 SR = 100.0
 NPTS = 3000
+# 3-C sizing windows are response-corrected on [t1 - ZNE_PRE_S, t2 + ZNE_POST_S] -- the SAME segment shape
+# in live and replay. obspy's correction tapers ~5 % of the segment at each end (~3.3 s here), so the
+# margins keep the taper off the 30 s window the model sees (training windows were untapered too).
+ZNE_PRE_S, ZNE_POST_S = 30.0, 6.0
 CONFIG_FILE = Path(__file__).resolve().parents[2] / "data" / "processed" / "v2" / "pipeline_config.json"
 
 
@@ -249,7 +253,7 @@ class Pipeline:
             near = np.flatnonzero(d <= self.cfg.size_radius_km)
             p_at = {i: ev.picks.get(self.codes[i], ev.t0 + float(locate.travel_time(d[i]))) for i in near}
             need = sorted(ev.stations, key=lambda i: d[i])[:self.cfg.min_stations]
-            ideal = max(p_at[i] for i in need) + 25.0 + 1.0
+            ideal = max(p_at[i] for i in need) + 25.0 + ZNE_POST_S
             if now < ideal:
                 continue
             X = np.zeros((len(self.codes), 3, NPTS), np.float32)
@@ -257,7 +261,7 @@ class Pipeline:
             for i in near:
                 t1 = p_at[i] - 5.0
                 end = self.source.end(self.codes[i])
-                if end is None or end < t1 + NPTS / SR:
+                if end is None or end < t1 + NPTS / SR + ZNE_POST_S:
                     continue
                 x = self.source.zne(self.codes[i], t1, t1 + NPTS / SR)
                 if x is not None and x.shape == (3, NPTS) and np.mean(x[0] == 0) < 0.05:

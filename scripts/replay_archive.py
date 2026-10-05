@@ -37,7 +37,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 from eq import locate, network, seismic  # noqa: E402
-from eq.pipeline import NPTS, SR, Config, MagnitudeEnsemble, Pipeline, clean_window, detect_probs  # noqa: E402
+from eq.pipeline import (NPTS, SR, ZNE_POST_S, ZNE_PRE_S, Config, MagnitudeEnsemble, Pipeline,  # noqa: E402
+                         clean_window, detect_probs)
 from eq.quakecast import load_catalog  # noqa: E402
 
 CACHE = seismic.RAW / "replay"
@@ -154,12 +155,13 @@ class ArchiveSource:
     def zne(self, c, t1, t2):
         key = (c, round(t1, 1))
         if key not in self.cache:
-            a, b = seismic.UTCDateTime(t1) - 30, seismic.UTCDateTime(t2) + 5
+            a, b = seismic.UTCDateTime(t1) - ZNE_PRE_S, seismic.UTCDateTime(t2) + ZNE_POST_S
             try:
                 st = seismic.get_waveforms(self.client, [c], a, b, channel="HH?")
                 x = seismic.to_zne(seismic.station_traces(st, c), self.inv, a, int(round((b - a) * SR))) \
                     if len(st) else None
-                self.cache[key] = None if x is None else x[:, int(30 * SR):int(30 * SR) + int(round((t2 - t1) * SR))]
+                i1 = int(round(ZNE_PRE_S * SR))
+                self.cache[key] = None if x is None else x[:, i1:i1 + int(round((t2 - t1) * SR))]
             except Exception:                                    # noqa: BLE001
                 self.cache[key] = None
         return self.cache[key]

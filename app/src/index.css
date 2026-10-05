@@ -146,6 +146,27 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .nearme { margin-top: var(--space-6); border-top: 1px solid var(--hairline); padding: var(--space-6) 0 var(--space-2); }
 .nearme h2 { font-size: 24px; margin-bottom: var(--space-3); }
 .nearme-lede { color: var(--body); font-size: 15px; margin-bottom: var(--space-5); text-wrap: pretty; }
+/* --- coverage map (monochrome: ink at low opacity for coverage, tokens only) --- */
+.coverage { margin-top: var(--space-6); border-top: 1px solid var(--hairline); padding: var(--space-6) 0 var(--space-2); }
+.coverage h2 { font-size: 24px; margin-bottom: var(--space-3); }
+.cov-card { padding: var(--space-4); }
+.cov-map { display: block; width: 100%; height: auto; }
+.cov-land { fill: var(--card-soft); }
+.cov-coast { fill: none; stroke: var(--mute); stroke-width: 0.8; stroke-linejoin: round; }
+.cov-2 { fill: color-mix(in srgb, var(--ink) 7%, transparent); shape-rendering: crispEdges; }
+.cov-3 { fill: color-mix(in srgb, var(--ink) 16%, transparent); shape-rendering: crispEdges; }
+.cov-city circle { fill: var(--canvas); stroke: var(--mute); stroke-width: 1; }
+.cov-city text { font-family: var(--body-font); font-size: 11px; fill: var(--body); paint-order: stroke; stroke: var(--card); stroke-width: 3px; }
+.cov-sta circle { fill: var(--ink); stroke: var(--canvas); stroke-width: 1.5; }
+.cov-sta text { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; fill: var(--ink); paint-order: stroke; stroke: var(--canvas); stroke-width: 3px; }
+.cov-legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); margin-top: var(--space-3); font-size: 13px; color: var(--body); }
+.cov-legend span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.cov-legend .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1px solid var(--hairline); }
+.cov-legend .sw-3 { background: color-mix(in srgb, var(--ink) 16%, var(--canvas)); }
+.cov-legend .sw-2 { background: color-mix(in srgb, var(--ink) 7%, var(--canvas)); }
+.cov-legend .sw-sta { width: 9px; height: 9px; border-radius: 9999px; background: var(--ink); border: none; }
+.cov-note { margin-top: var(--space-2); font-size: 13px; }
+
 .card { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--card-radius); padding: var(--space-5); }
 .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: var(--space-4); }
 .field label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); }

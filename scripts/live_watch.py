@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
 import shaking_model  # noqa: E402
 from eq import locate, network, seismic  # noqa: E402
-from eq.pipeline import Config, Event, MagnitudeEnsemble, Pipeline  # noqa: E402
+from eq.pipeline import ZNE_POST_S, ZNE_PRE_S, Config, Event, MagnitudeEnsemble, Pipeline  # noqa: E402
 
 DETECTOR = ROOT / "data" / "processed" / "detector.pt"
 MAG_CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
@@ -103,16 +103,20 @@ class LiveSource:
         return x[i1:i1 + n] if i1 >= 0 and i1 + n <= len(x) else None
 
     def zne(self, c, t1, t2):
-        st = self._snap(c)
-        if len(st) < 3:
+        """3-C velocity for [t1, t2]. The response is removed on [t1 - ZNE_PRE_S, t2 + ZNE_POST_S] only --
+        the same segment the replay harness corrects -- NOT on the whole 300 s buffer, whose end taper
+        (5 % = 15 s) used to attenuate the newest seconds of the sizing window and bias magnitudes low."""
+        import obspy
+        a, b = obspy.UTCDateTime(t1 - ZNE_PRE_S), obspy.UTCDateTime(t2 + ZNE_POST_S)
+        st = self._snap(c).slice(a, b)
+        if len(st) < 3 or min(tr.stats.endtime for tr in st) < b - 0.05:
             return None
-        t0 = st[0].stats.starttime
-        x = seismic.to_zne(st, self.inv, t0, int(round((st[0].stats.endtime - t0) * seismic.SR)) + 1)
+        n_seg = int(round((b - a) * seismic.SR))
+        x = seismic.to_zne(st, self.inv, a, n_seg)
         if x is None:
             return None
-        i1 = int(round((t1 - t0.timestamp) * seismic.SR))
-        n = int(round((t2 - t1) * seismic.SR))
-        return x[:, i1:i1 + n] if i1 >= 0 and i1 + n <= x.shape[1] else None
+        i1, n = int(round(ZNE_PRE_S * seismic.SR)), int(round((t2 - t1) * seismic.SR))
+        return x[:, i1:i1 + n]
 
     def health(self):
         now = time.time()

@@ -4,6 +4,7 @@ import { caTop, geocode, getAppVersion, getStations, liveStatus, sendContact, ty
 import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, subscribedName } from './push'
 import { getMyLocation } from './geo'
 import { APP_VERSION, mustUpdate, updateAvailable } from './version'
+import Coverage from './Coverage'
 
 // The public site, for sending the app to the download/update page in an external browser.
 const APP_SITE = 'https://seismicsocal.duckdns.org'
@@ -395,6 +396,8 @@ function Console({ data }: { data: Seismic }) {
       </section>
 
       <Carousel data={data} />
+
+      <Coverage />
 
       <NearMe />
 

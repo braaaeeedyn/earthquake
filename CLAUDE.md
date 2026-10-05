@@ -174,7 +174,9 @@ running Aug-10 models on the old 10-station network — always verify checkpoint
 - **Shadow mode → pushes:** after deploying v2, run >= 7 days with `PUSH_ENABLED=0`, score with
   `crosscheck_events.py`, then enable.
 - **Rebuild the APK** (station-network message in `App.tsx`; needs the Android SDK).
-- **Replay the Sep 2020 validation week** (scan was reaped at 15/168 h for low memory) to widen calibration.
+- **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
+  station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
+- **Two-stage alert** ("detected, sizing…" then confirm/retract with magnitude) — discussed, not built.
 - **Seed-averaged magnitude R² with a CI** write-up (QuakeOps Phase 2).
 - **Retrain EEW on the live network** and decide whether it belongs in the live alert.
 - QuakeOps (MLflow / gate / drift): see `QUAKEOPS_PLAN.md`, `QUAKEOPS_IMPLEMENTATION.md` (to be re-based on v2).

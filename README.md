@@ -59,13 +59,14 @@ SeedLink (19 CI stations, pinned location codes)  ->  per-station buffers
 **Why 3 stations:** with 3 picks the location (lat, lon, origin time) is exactly determined, which is the
 minimum that tests whether the picks come from one place; the "no silent nearer station" rule then rejects
 coincident noise (a real quake reaches nearer stations first). Two stations always "fit" and prove nothing.
-Requiring 4 lost about a third of real detections in validation and weakens sparse coverage (San Diego /
-Imperial). The **M3.0 floor** keeps pushes to quakes people can feel.
+On the full validation set 4 stations confirmed 31 events vs 86 and missed a real out-of-network M3.6 that
+3 stations caught; unmatched 3-station confirmations are logged only and sit at the network edges. The **M3.0 floor** keeps pushes to quakes people can feel.
 
 ### Replay harness — the acceptance test (`scripts/replay_archive.py`)
 
 Runs the exact live engine over **archived continuous data** (SCEDC), so the live behaviour is measured
-offline. Thresholds were chosen on validation days (Sep 29 – Oct 2 2026) and scored once on held-out days:
+offline. Thresholds were chosen on 10 validation days (Sep 29 – Oct 2 2026 + Sep 7–14 2020) and scored
+once on held-out days:
 
 | 10 held-out days (Oct 2–5 + Aug 18–25 2026) | new pipeline |
 |---|---|
