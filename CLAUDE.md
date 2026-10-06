@@ -218,10 +218,13 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Shadow mode → pushes (~2026-10-12):** read the nightly report; if `confirmed` precision is well above
   its chance baseline and pushed magnitudes match USGS, set `PUSH_ENABLED=1` and restart. Replay predicts
   ~7 confirmed/day — if live stays far below that, replay the same hours and compare.
-- **APK 2.00.00 (user, on the other device — it has the Android project + `google-services.json`):** merge
-  `origin/release-2.00.00` (version + forced-update gate), set versionName/versionCode, run
-  `VITE_API_BASE=https://seismicsocal.duckdns.org bash scripts/build_apk.sh`, push; then deploy server.py +
-  dist + APK together. This PC's `app/android` is a stale template without Firebase config — don't ship from it.
+- **APK 2.00.00 (user, on the other device — it has the Android project + `google-services.json`):** branch
+  `release-2.00.00-quakeops` already has the version bump merged (app/src/version.ts and server.py LATEST/MIN =
+  2.00.00, i.e. a FORCED update) plus the alert-speed picker. Check out that branch, set versionName "2.00.00" /
+  versionCode (+1) in app/android/app/build.gradle, run `VITE_API_BASE=https://seismicsocal.duckdns.org bash
+  scripts/build_apk.sh`, then deploy server.py + dist + APK (+ early_mag_T2.json) TOGETHER — a server at MIN 2.00.00
+  without the new APK on /app would lock every 1.01.00 user out. This PC's `app/android` is a stale template without
+  Firebase config — don't ship from it.
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **QuakeOps go-live (code done 2026-10-05, nothing on the VM yet; DEPLOY.md "QuakeOps"):** user steps =

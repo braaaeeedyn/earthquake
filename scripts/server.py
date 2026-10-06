@@ -49,8 +49,8 @@ NET_COORDS = [(s["lat"], s["lon"]) for s in STATIONS]
 # App version gate. `LATEST` = newest released app; `MIN` = lowest version allowed to run. The
 # installed app compares itself: behind MIN on MAJOR or MINOR -> blocked (must re-download); a PATCH
 # gap is only a soft notice. Bump LATEST every release; bump MIN (major/minor) to FORCE an update.
-APP_LATEST_VERSION = "1.01.00"
-APP_MIN_VERSION = "1.01.00"
+APP_LATEST_VERSION = "2.00.00"
+APP_MIN_VERSION = "2.00.00"
 # "Catchable" = where and how big the live pipeline can actually confirm a quake: >= 3 stations within
 # 100 km (the confirmation rule's coverage) and M >= 2.0 (replay harness: ~80 % of in-coverage M2+
 # quakes caught, ~48 % at M1.5-2, ~9 % below). The largest-quakes browser lists only these.
