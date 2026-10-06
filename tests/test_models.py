@@ -1,15 +1,10 @@
-import sys
-from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from seismic_train import DetectorNet  # noqa: E402
-from seismic_train_multi import MultiStationModel, adjacency  # noqa: E402
-
-from eq import network  # noqa: E402
+from eq import network
+from eq.models import DetectorNet, MultiStationModel, adjacency
 
 
 def test_detector_overfits_tiny_batch():

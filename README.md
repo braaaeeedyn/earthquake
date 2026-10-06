@@ -171,10 +171,11 @@ adds +0.003 over a single model, well inside the sampling CI, so the live system
 ```
 src/eq/
   network.py       # THE live station list (19 stations) — every consumer imports it
+  models.py        # DetectorNet (detect), MultiStationModel + station graph (size), STA/LTA baseline
   pipeline.py      # live engine: DQ gate, detect, pick, locate/associate, size, decide (live + replay)
   locate.py        # P picker, travel times (+ fitted correction), grid-search locator
   seismic.py       # SCEDC waveform access (response removal, 18 Hz common low-pass, compact cache)
-  quakecast.py     # USGS catalog (monthly chunks, auto-split, date-ranged cache)
+  catalog.py       # USGS catalog (monthly chunks, auto-split, date-ranged cache)
   stats.py         # bootstrap / cluster / paired bootstrap CIs, seed t-CI
 scripts/
   build_dataset.py      # v2 datasets on the live network (check / select / fetch / assemble)
@@ -184,10 +185,11 @@ scripts/
   replay_archive.py     # replay harness: scan / calibrate / run / events / compare-live
   live_watch.py         # LIVE SeedLink daemon (pushes only with PUSH_ENABLED=1)
   select_network.py     # reproduce the station selection (streamable, quiet, spaced, coverage)
-  migrate_subscriptions.py  # map retired stations in push_tokens.json to the nearest new one
   crosscheck_events.py  # score the live log vs USGS, with a time-shifted chance baseline
-  server.py / push_fcm.py / shaking_model.py / quake_archive.py / nearme_watch.py
-  seismic_train.py / seismic_train_multi.py   # model definitions (DetectorNet, MultiStationModel)
+  server.py             # API + supervisor of live_watch.py
+  push_fcm.py / shaking_model.py / mailer.py   # FCM pushes / shaking wording / .env + operator email
+  calibrate_shaking.py  # fits shaking_calibration.json (the shaking model's coefficients)
+  build_apk.sh          # Android APK from the web build
 app/                    # React + Vite + Capacitor console (web + Android)
 tests/                  # pytest: network, picker/locator, pipeline rules, overfit-one-batch models
 ```

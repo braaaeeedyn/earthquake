@@ -1,4 +1,10 @@
-# Phase 1 core pipeline dependencies (lightweight, no ML framework yet).
+# Live server (VM): API + SeedLink daemon + QuakeOps daily job. On ARM64, plain `pip install torch` is the CPU build.
 numpy>=1.26
+scipy>=1.11
 pandas>=2.1
-pytest>=7.4
+obspy>=1.4
+torch>=2.2
+google-auth>=2.0          # FCM push (service-account OAuth)
+requests>=2.31
+mlflow-skinny>=3.16       # tracking.py pull (registry client only)
+evidently==0.7.23         # drift_check.py (pinned: the Report API changed at 0.7)

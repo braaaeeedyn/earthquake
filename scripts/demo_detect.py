@@ -1,6 +1,6 @@
 """Train + evaluate the v2 DETECTOR on the live network's data (data/processed/v2/detection.npz).
 
-What changed vs v1 (see URGENT_PLAN.md section 2.2):
+What changed vs v1 (HOW_IT_WORKS.md section 4.1):
   - onset-position augmentation: P is placed anywhere 1-25 s into the 30 s window, so the detector
     is time-invariant like the live sliding window (v1 only ever saw P at exactly 5 s);
   - negatives = random-time noise (all hours, screened against ANY M>=1 quake) + HARD negatives
@@ -33,12 +33,12 @@ import torch.nn as nn
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
-from seismic_train import DetectorNet, sta_lta_scores, SR  # noqa: E402
 from sklearn.metrics import matthews_corrcoef, roc_auc_score, roc_curve  # noqa: E402
 
 import tracking  # noqa: E402
 from eq import network, stats  # noqa: E402
-from eq.pipeline import Config, det_prep  # noqa: E402
+from eq.models import DetectorNet, sta_lta_scores  # noqa: E402
+from eq.pipeline import SR, Config, det_prep  # noqa: E402
 
 NPZ = ROOT / "data" / "processed" / "v2" / "detection.npz"
 CKPT = ROOT / "data" / "processed" / "detector.pt"

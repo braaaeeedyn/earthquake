@@ -125,12 +125,13 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   `scripts/tracking.py` is the only module that imports mlflow (no-op without `MLFLOW_TRACKING_URI`).
 
 ### How it fits together (Frontend / Online / Offline)
-- **OFFLINE (PC).** `build_dataset.py` (USGS catalog M1+ via `quakecast.py`; one SCEDC request per event,
+- **OFFLINE (PC).** `build_dataset.py` (USGS catalog M1+ via `src/eq/catalog.py`; one SCEDC request per event,
   response-removed, cached in `data/raw/v2/`) → `data/processed/v2/{detection,magnitude}.npz`;
-  `demo_detect.py` / `demo_magnitude.py` train on the GPU → `detector.pt`, `magnitude_ensemble.pt`;
+  `demo_detect.py` / `demo_magnitude.py` train on the GPU (networks in `src/eq/models.py`) → `detector.pt`,
+  `magnitude_ensemble.pt`;
   `replay_archive.py` scans archived continuous data, calibrates `data/processed/v2/pipeline_config.json`
   (validation days) and scores test days. `app/public/seismic.json` holds the published numbers.
-- **ONLINE (VM).** `server.py` auto-spawns `live_watch.py`, a thin SeedLink shell around
+- **ONLINE (VM).** `server.py` (env + operator email via `scripts/mailer.py`) auto-spawns `live_watch.py`, a thin SeedLink shell around
   `src/eq/pipeline.py` (detect → pick → locate → size → decide, all on data time). `/api/status` includes
   per-station health from `data/processed/live_status.json`. Other routes: `/api/ca`, `/api/geocode`,
   `/api/stations`, `/api/register-push`, `/api/unregister-push`, `/api/version`, `/api/contact`.
@@ -191,7 +192,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   gets the common 18 Hz low-pass.
 - Stations can drop off the public SeedLink relay (SCZ2 did during selection) — re-run
   `build_dataset.py --stage check` / `select_network.py` before relying on a station.
-- USGS FDSN answers HTTP 400 (not a truncated list) above 20k rows; `quakecast` splits the interval.
+- USGS FDSN answers HTTP 400 (not a truncated list) above 20k rows; `eq/catalog.py` splits the interval.
 - Low RAM (16 GB, other apps): long background jobs can be reaped; everything is resumable/cached.
 - `crosscheck_events.py` line ~118 has a pre-existing unused variable (`c`) flagged by ruff F841 (ignored per file in
   `ruff.toml`, with the other legacy-script F errors). Its `--time-tol` / `--dist-tol` help text says 180 s / 100 km;

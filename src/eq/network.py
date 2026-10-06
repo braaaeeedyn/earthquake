@@ -55,8 +55,3 @@ INDEX = {c: i for i, c in enumerate(CODES)}
 def as_api():
     """Station list for /api/stations (code, lat, lon, region)."""
     return [{"code": s[0], "lat": s[2], "lon": s[3], "region": s[4]} for s in LIVE_NETWORK]
-
-
-def seed_id(code, channel="HHZ"):
-    """Full SEED id, e.g. 'CI.PASC.10.HHZ'."""
-    return f"{NET}.{code}.{LOC[code]}.{channel}"

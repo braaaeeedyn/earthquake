@@ -10,7 +10,7 @@ Auth: FCM's legacy server key is retired, so we use the HTTP v1 API with an OAut
 token minted from the service-account key (Firebase console -> Project settings ->
 Service accounts -> Generate new private key). Path via env FCM_SERVICE_ACCOUNT, else the
 repo-root fcm-service-account.json. Missing creds -> dry-run print (same contract as
-nearme_watch.send_email), so the app/server still run without push configured.
+mailer.send_email), so the app/server still run without push configured.
 
   python scripts/push_fcm.py --selftest      # mint a token + validate creds (no send)
 """
@@ -75,7 +75,7 @@ def send_push(token, title, body, dry_run=False, tag=None):
     daemon tags both stages of an event with its id, so the confirmation (or retraction) overwrites
     the provisional "detected, sizing..." notice instead of stacking under it.
     dry_run or missing service-account key -> print instead of send (returns False so callers
-    can count real sends). Mirrors nearme_watch.send_email's fail-soft behaviour.
+    can count real sends). Mirrors mailer.send_email's fail-soft behaviour.
     """
     if dry_run or not SA_PATH.exists():
         why = "dry-run" if dry_run else f"no {SA_PATH.name}"

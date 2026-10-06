@@ -16,7 +16,6 @@ from obspy import UTCDateTime, read_inventory
 from obspy.clients.fdsn import Client
 from scipy.signal import butter, sosfilt
 
-from .locate import haversine_km  # noqa: F401  (re-exported: older scripts import it from here)
 from .network import CODES, LOC, NET
 
 SR = 100.0

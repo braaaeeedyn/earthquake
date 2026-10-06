@@ -31,12 +31,11 @@ sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "src")]
 import demo_detect as DD  # noqa: E402
 import demo_magnitude as DM  # noqa: E402
 import replay_archive as R  # noqa: E402
-from seismic_train import DetectorNet, sta_lta_scores  # noqa: E402
-from seismic_train_multi import adjacency  # noqa: E402
 from sklearn.linear_model import LinearRegression  # noqa: E402
 from sklearn.metrics import roc_auc_score, roc_curve  # noqa: E402
 
 from eq import locate  # noqa: E402
+from eq.models import DetectorNet, adjacency, sta_lta_scores  # noqa: E402
 
 OUT = ROOT / "app" / "public"
 REPLAY = ROOT / "data" / "processed" / "v2" / "replay"

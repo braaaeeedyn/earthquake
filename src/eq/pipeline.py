@@ -388,9 +388,7 @@ class MagnitudeEnsemble:
 
     def __init__(self, ckpt_path, codes, coords, device="cpu"):
         import torch
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-        from seismic_train_multi import MultiStationModel, adjacency
+        from .models import MultiStationModel, adjacency
         ck = torch.load(ckpt_path, weights_only=False, map_location=device)
         if list(ck["stations"]) != list(codes):
             raise RuntimeError(f"magnitude checkpoint stations {list(ck['stations'])} != network {list(codes)}")

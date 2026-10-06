@@ -45,7 +45,7 @@ import tracking  # noqa: E402
 from eq import locate, network, seismic  # noqa: E402
 from eq.pipeline import (NPTS, SR, ZNE_POST_S, ZNE_PRE_S, Config, MagnitudeEnsemble, Pipeline,  # noqa: E402
                          clean_window, detect_probs)
-from eq.quakecast import load_catalog  # noqa: E402
+from eq.catalog import load_catalog  # noqa: E402
 
 CACHE = seismic.RAW / "replay"
 OUT = ROOT / "data" / "processed" / "v2" / "replay"

@@ -150,8 +150,9 @@ python scripts/crosscheck_events.py --since <shadow start date>   # precision vs
 ```
 
 Turn pushes on only if the live scorecard matches what the offline replay harness predicted
-(`scripts/replay_archive.py`, see README). When the station network changes, migrate subscriptions
-first: `python scripts/migrate_subscriptions.py` (dry run) then `--apply` (keeps a backup).
+(`scripts/replay_archive.py`, see README). Subscriptions store station codes, so if the station network
+ever changes, subscribers following a retired station must be moved to a remaining one (the one-off
+`migrate_subscriptions.py` used for the 2026-10-05 change is in git history, added in commit ccac5c6).
 
 ## Operating it
 

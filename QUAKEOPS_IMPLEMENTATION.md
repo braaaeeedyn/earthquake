@@ -8,7 +8,7 @@
 > **Guiding rule:** extend what exists. QuakeOps adds four technologies (**MLflow, Evidently, Dagster,
 > GitHub Actions**) and otherwise reuses the current scripts: `demo_detect.py` / `demo_magnitude.py`
 > (training + evaluation), `build_dataset.py` (data), `replay_archive.py` (acceptance), `server.py`
-> (API), the `crosscheck` systemd-timer pattern, `nearme_watch.send_email`, and the
+> (API), the `crosscheck` systemd-timer pattern, a shared mailer (`mailer.send_email`), and the
 > `server.py` supervisor that already respawns the daemon.
 
 ---

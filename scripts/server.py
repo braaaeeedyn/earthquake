@@ -1,9 +1,9 @@
-"""Minimal stdlib backend for the near-me feature: push register/unregister + live USGS events.
+"""SeismicSoCal backend (stdlib HTTP, behind Caddy): the site/app API + supervisor of the live daemon.
 
-No framework (Flask/FastAPI not installed). The Vite dev server proxies /api/* here, so the
-app calls /api/register-push, /api/unregister-push and /api/events with no CORS fuss. Alerts
-are push-only (app-only product); a device sends {token, stations, name} and receives FCM
-pushes from the live watcher when one of its subscribed stations fires. Run alongside the app:
+No framework. The Vite dev server proxies /api/* here. Routes: /api/stations, /api/status, /api/ca,
+/api/health, /api/geocode, /api/version, POST /api/register-push, /api/unregister-push, /api/contact.
+Alerts are push-only (app-only product); a device sends {token, stations, name, mode} and receives FCM
+pushes from the live watcher (live_watch.py, spawned and respawned here) for quakes near its stations.
 
   python scripts/server.py            # http://localhost:8000
   cd app && npm run dev               # http://localhost:5173  (proxies /api -> :8000)
@@ -25,10 +25,10 @@ from urllib.parse import parse_qs, urlencode, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
-import quake_archive  # noqa: E402
 import push_fcm  # noqa: E402
-from nearme_watch import fetch_usgs, haversine_km  # noqa: E402  (import also loads .env into os.environ)
+import mailer  # noqa: E402,F401  (import loads .env into os.environ)
 from eq import network  # noqa: E402
+from eq.locate import haversine_km  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8000"))
 # Bind address. Default 127.0.0.1 (safe: reach it through a reverse proxy that terminates TLS).
@@ -233,22 +233,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/api/events":
-            # refresh the live feed, fold it into the daily archive, return today's top-5
-            try:
-                arc = quake_archive.update(fetch_usgs("2.5_day"))
-                self._send(200, self._day(arc, quake_archive.today()))
-            except Exception as e:                       # network hiccup
-                self._send(502, {"error": str(e)})
-        elif path == "/api/archive":
-            # ?date=YYYY-MM-DD -> that day's top-5; no date -> list of available dates
-            arc = quake_archive.load()
-            date = parse_qs(urlparse(self.path).query).get("date", [None])[0]
-            if date:
-                self._send(200, self._day(arc, date))
-            else:
-                self._send(200, {"dates": sorted(arc.keys(), reverse=True)})
-        elif path == "/api/ca":
+        if path == "/api/ca":
             # ?window=day|week|month|year|all -> top-5 largest California quakes in that window
             window = parse_qs(urlparse(self.path).query).get("window", ["day"])[0]
             try:
@@ -294,11 +279,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, out)
         else:
             self._send(404, {"error": "not found"})
-
-    @staticmethod
-    def _day(arc, date):
-        bucket = arc.get(date, {"world": [], "area": []})
-        return {"date": date, "world": bucket["world"], "area": bucket["area"]}
 
     def do_POST(self):
         # Alerts are push-only (the app-only product): a device subscribes by registering its
@@ -411,7 +391,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"could not start live_watch.py ({e!r}); API runs, supervisor will retry")
     threading.Thread(target=supervise_watcher, daemon=True).start()
-    print(f"near-me backend on http://{HOST}:{PORT}  (POST /api/register-push, GET /api/events)")
+    print(f"near-me backend on http://{HOST}:{PORT}  (GET /api/status, POST /api/register-push, ...)")
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     try:
         server.serve_forever()

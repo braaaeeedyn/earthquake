@@ -72,7 +72,7 @@ PASC is pinned to location code `10` because it streams two sensors.
 
 ## 3. Data
 
-### 3.1 Catalogue — `src/eq/quakecast.py`, `src/eq/data/usgs.py`
+### 3.1 Catalogue — `src/eq/catalog.py`
 
 - **What:** the USGS FDSN catalogue for 2000-01-01 → 2026-10-05, M ≥ 1.0, in a box around SoCal
   (31.5–37.5°N, 122–113.5°W). That's about 424,000 events with id, time, location, depth and
@@ -159,7 +159,7 @@ Training data and live data are aligned by the **same picker**.
 
 ## 4. The models
 
-### 4.1 Detect — `scripts/demo_detect.py`, `DetectorNet` in `scripts/seismic_train.py`
+### 4.1 Detect — `scripts/demo_detect.py`, `DetectorNet` in `src/eq/models.py`
 
 - **Question:** is there an earthquake in this 30 s vertical window?
 - **Input preparation (`pipeline.det_prep`):**
@@ -210,7 +210,7 @@ Training data and live data are aligned by the **same picker**.
   event**. Every station window of one quake (and every station's noise window at one random time)
   resamples together, because treating them as independent would make the interval too narrow.
 
-### 4.2 Size — `scripts/demo_magnitude.py`, `MultiStationModel` in `scripts/seismic_train_multi.py`
+### 4.2 Size — `scripts/demo_magnitude.py`, `MultiStationModel` in `src/eq/models.py`
 
 - **Question:** given a located quake, what's its magnitude?
 - **Input:** for each working station within 200 km, a 3-component window from 5 s before its P to
@@ -470,7 +470,6 @@ still below the push floor.
 | `POST /api/unregister-push` | Remove a device. |
 | `POST /api/contact` | Relay a support message by SMTP (nothing stored). |
 
-`/api/events` and `/api/archive` are older routes from the USGS daily feed. The current site doesn't use them.
 
 **How `/api/ca` filters and marks quakes:**
 - It lists only quakes the pipeline **could catch**:

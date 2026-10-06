@@ -10,7 +10,7 @@ Stages (each resumable; fetched windows are cached under data/raw/v2/):
   assemble  pick P on every trace (same picker as live), fit the travel-time correction,
             write data/processed/v2/{magnitude,detection}.npz
 
-Labels (see URGENT_PLAN.md section 2.2):
+Labels (HOW_IT_WORKS.md section 3.2):
   magnitude  : catalog M>=3.0 events with network stations <= 200 km (light declustering: <= 25 per
                0.2-deg cell per month, largest kept, so one aftershock sequence can't dominate)
                + the M2-3 events with stations <= 100 km, so small live detections size correctly
@@ -42,7 +42,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from eq import locate, network, seismic  # noqa: E402
-from eq.quakecast import load_catalog  # noqa: E402
+from eq.catalog import load_catalog  # noqa: E402
 
 RAW = seismic.RAW
 OUT = ROOT / "data" / "processed" / "v2"

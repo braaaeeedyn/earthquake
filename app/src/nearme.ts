@@ -24,12 +24,6 @@ export interface UsgsEvent {
   caught?: { status: 'caught' | 'seen' | 'missed'; mag?: number | null; n_stations?: number } | null
 }
 
-// One day's top-5 largest quakes, worldwide and in the California "area".
-export interface DayTop {
-  date: string
-  world: UsgsEvent[]
-  area: UsgsEvent[]
-}
 
 // A sensor station in the trained network (code + location), from GET /api/stations.
 export interface Station {
@@ -82,27 +76,6 @@ export async function sendContact(p: { email: string; message: string }) {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
   return data as { ok: boolean }
-}
-
-// Today's live top-5 (also folds the current USGS feed into the server-side daily archive).
-export async function todayTop(): Promise<DayTop> {
-  const res = await fetch(api('/api/events'))
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return (await res.json()) as DayTop
-}
-
-// The list of dates the archive holds (newest first).
-export async function archiveDates(): Promise<string[]> {
-  const res = await fetch(api('/api/archive'))
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return (await res.json()).dates as string[]
-}
-
-// A specific past day's top-5.
-export async function archiveDay(date: string): Promise<DayTop> {
-  const res = await fetch(api(`/api/archive?date=${encodeURIComponent(date)}`))
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return (await res.json()) as DayTop
 }
 
 // Top-5 largest California quakes for a named time window (day/week/month/year/all).

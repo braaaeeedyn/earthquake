@@ -23,7 +23,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from eq import locate, network  # noqa: E402
-from eq.quakecast import load_catalog  # noqa: E402
+from eq.catalog import load_catalog  # noqa: E402
 
 OUT = ROOT / "data" / "raw" / "v2" / "network_selection.json"
 CITIES = {"Los Angeles": (34.05, -118.24), "San Diego": (32.72, -117.16), "Riverside": (33.95, -117.40),

@@ -1,11 +1,13 @@
-"""Estimated shaking at a subscriber's location, and the 2-of-3 alert decision built on it.
+"""Estimated shaking at a subscriber's location -- the wording of the confirmed push.
 
-The live alert product has no waveform stream at the user's location, so at alert time it
-estimates shaking from the event's magnitude and the user's distance to the (proxy) epicentre,
-using models CALIBRATED on the same training data as the magnitude network
-(scripts/calibrate_shaking.py -> data/processed/shaking_calibration.json). Three criteria vote,
-and criterion (1) -- notable PGV amplitude -- is REQUIRED for any alert, so nothing imperceptible
-pushes (in particular the felt-distance bound alone can no longer fire a notification):
+LIVE USE: live_watch.push_message calls estimate_mmi(mag, distance) + describe() to say e.g. "Weak shaking
+possible near you". WHETHER to push is decided elsewhere (pipeline.push_eligible: confirmed, M >= 3.0;
+live_watch.alert_devices: a followed sensor within 150 km). There is no waveform stream at the user's
+location, so shaking is estimated from magnitude and distance with models CALIBRATED on the training data
+(scripts/calibrate_shaking.py -> data/processed/shaking_calibration.json).
+
+The 2-of-3 vote below (alert_votes / alert_level) is the calibration's diagnostic -- calibrate_shaking.py
+prints its decision table -- not the live push gate. Its three criteria, with (1) required:
 
   (1) PGV amplitude   — a ground-motion model fit to the network's recorded peak velocities
                         predicts shaking >= a "notable" floor (a data percentile).
@@ -111,7 +113,6 @@ def describe(mmi):
 # so nothing imperceptible ever pushes. Above that floor: (1) alone -> POTENTIAL earthquake
 # warning (tentative); (1) plus (2) and/or (3) -> EARTHQUAKE WARNING (corroborated).
 LEVEL_NONE, LEVEL_POTENTIAL, LEVEL_WARNING = 0, 1, 2
-LEVEL_NAME = {0: "none", 1: "potential earthquake warning", 2: "earthquake warning"}
 
 
 def alert_votes(mag, dist_km):
@@ -136,9 +137,3 @@ def alert_level(mag, dist_km):
         return LEVEL_NONE
     votes = c1 + c2 + c3
     return LEVEL_WARNING if votes >= 2 else LEVEL_POTENTIAL
-
-
-def should_alert(mag, dist_km, threshold_mmi=None):
-    """Whether ANY alert (potential or full) fires -- i.e. the estimated shaking clears the felt
-    floor (criterion 2). `threshold_mmi` is accepted for backward compatibility but ignored."""
-    return alert_level(mag, dist_km) >= LEVEL_POTENTIAL

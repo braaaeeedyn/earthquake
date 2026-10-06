@@ -5,10 +5,5 @@ line-length = 120
 select = ["F", "E9"]
 
 [lint.per-file-ignores]
-# pre-existing unused names in legacy / research scripts (left as-is; see CLAUDE.md gotchas)
+# pre-existing unused name (left as-is; see CLAUDE.md gotchas)
 "scripts/crosscheck_events.py" = ["F841"]
-"scripts/demo_eew.py" = ["F541", "F841"]
-"scripts/nearme_watch.py" = ["F401"]
-"scripts/seismic_figures.py" = ["F401"]
-"scripts/seismic_train.py" = ["F841"]
-"scripts/seismic_train_multi.py" = ["F841"]

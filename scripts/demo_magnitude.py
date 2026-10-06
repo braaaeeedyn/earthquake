@@ -1,6 +1,6 @@
 """Train + evaluate the v2 multi-station MAGNITUDE ensemble (data/processed/v2/magnitude.npz).
 
-Training geometry == live geometry (see URGENT_PLAN.md section 2):
+Training geometry == live geometry (HOW_IT_WORKS.md section 4.2):
   - every station window starts 5 s before its PICKED P (same picker as live), 30 s long;
   - input representation: each station's 3-C window is normalized to unit peak (the CNN reads SHAPE)
     and its standardized log10 peak velocity is a graph-node feature next to log-distance (the graph
@@ -35,10 +35,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 from sklearn.linear_model import LinearRegression  # noqa: E402
-from seismic_train_multi import MultiStationModel, adjacency  # noqa: E402
 
 import tracking  # noqa: E402
 from eq import locate, network, stats  # noqa: E402
+from eq.models import MultiStationModel, adjacency  # noqa: E402
 
 NPZ = ROOT / "data" / "processed" / "v2" / "magnitude.npz"
 CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"

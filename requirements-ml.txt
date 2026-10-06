@@ -1,10 +1,9 @@
-# Phase 4+ model dependencies. Installed separately to keep the pipeline lightweight.
+# PC: training, evaluation, replay, figures, QuakeOps orchestration + dev tools (on top of the server set).
 -r requirements.txt
-torch>=2.2
 scikit-learn>=1.4
 matplotlib>=3.8
-# QuakeOps (PC): tracking/registry, drift, orchestration. VM daemon venv needs only mlflow-skinny + evidently.
-mlflow>=3.16
-evidently==0.7.23
+mlflow>=3.16              # full MLflow (the server itself runs in its own venv on the VM)
 dagster>=1.13
 dagster-webserver>=1.13
+pytest>=7.4
+ruff>=0.5

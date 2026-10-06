@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import nearme_watch  # noqa: E402,F401  (import loads .env into os.environ)
+import mailer  # noqa: E402  (import loads .env into os.environ)
 
 PROC = ROOT / "data" / "processed"
 MODELS_JSON = PROC / "models.json"
@@ -273,7 +273,7 @@ def pull(args):
 def ops_email(subject, body):
     to = os.environ.get("OPS_EMAIL_TO") or os.environ.get("SMTP_USER")
     if to:
-        nearme_watch.send_email(to, subject, body, dry_run=False)
+        mailer.send_email(to, subject, body)
     else:
         print(f"[ops email, no recipient configured] {subject}: {body}")
 

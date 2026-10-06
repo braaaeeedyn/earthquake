@@ -59,7 +59,7 @@ ALERT_REACH_KM = 150.0            # devices subscribed to a station within this 
 
 def load_detector(device="cpu", path=DETECTOR):
     import torch
-    from seismic_train import DetectorNet
+    from eq.models import DetectorNet
     ck = torch.load(path, weights_only=False, map_location=device)
     if list(ck["stations"]) != network.CODES:
         raise RuntimeError(f"detector trained on {list(ck['stations'])}, network is {network.CODES}")
