@@ -131,6 +131,9 @@ def main():
         build_reference(Path(args.det), Path(args.out))
         return
     today = datetime.now(timezone.utc).date()
+    if not REF.exists():
+        raise SystemExit(f"no {REF.name}: run `tracking.py pull` (installs it with the champion detector) or "
+                         f"`drift_check.py --build-reference` on the PC and copy it here")
     check(args.day or (today - timedelta(days=1)).isoformat())
     prune(today)
 

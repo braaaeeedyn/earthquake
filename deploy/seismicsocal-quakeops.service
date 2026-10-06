@@ -13,5 +13,6 @@ User=ubuntu
 WorkingDirectory=/opt/seismicsocal
 EnvironmentFile=-/opt/seismicsocal/.env
 Environment=MLFLOW_DISABLE_AGENT_HINT=1
-ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/tracking.py pull
+# '-' = a failed pull (e.g. MLflow down) must not skip the drift check below
+ExecStart=-/opt/seismicsocal/.venv/bin/python -u scripts/tracking.py pull
 ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/drift_check.py

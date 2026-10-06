@@ -246,6 +246,15 @@ def pull(args):
             note.append(f"{name} v{v} installed")
         elif deployed != v:
             note.append(f"{name} v{v} is @champion but v{deployed} is deployed (pull --apply to install)")
+        if deployed == v:                                    # the deployed version's sidecars must be present too
+            missing = [rel for rel in sidecars if not (PROC / rel).exists()]   # (e.g. drift_reference.csv on first pull)
+            if missing:
+                src = download(name, v, PROC / "models" / name / f"v{v}")
+                for rel in missing:
+                    if (src / Path(rel).name).exists():
+                        (PROC / rel).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(src / Path(rel).name, PROC / rel)
+                        print(f"{name} v{v}: installed missing sidecar {rel}")
         info["deployed"] = deployed
         out[name] = info
         for mv in client().search_model_versions(f"name='{name}'"):
