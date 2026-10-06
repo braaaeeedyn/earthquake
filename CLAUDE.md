@@ -209,9 +209,7 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   signed with the other device's debug key (different signature from 1.01.00), so updating = uninstall +
   reinstall; that wipes the app's stored subscription, so users must re-subscribe. Stale tokens are pruned
   automatically when FCM answers UNREGISTERED on the next push.
-- **`early_mag_T2.json` is NOT on the VM yet** (it is on the Windows PC, `data/processed/v2/`). Until it is
-  copied, only the standard profile runs: fast subscribers get no provisional push (they still get the
-  confirmation). Copy it before setting PUSH_ENABLED=1.
+- **Both alert-speed profiles running** (`early_mag_T2.json` copied 2026-10-06; daemon log: `alert-speed profiles: ['fast', 'standard']`).
 - **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
 - **QuakeOps not set up on the VM** (no MLflow / quakeops timer / GitHub secrets): /health shows "hasn't reported".
