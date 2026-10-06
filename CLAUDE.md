@@ -86,17 +86,21 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 
 | Task | Architecture | Deep (held-out test) | Baseline |
 |------|--------------|----------------------|----------|
-| **Detect** | CNN → Transformer (single-station, 30 s, 1 Hz HP) | AUC **0.9998**, MCC 0.886 (n=7,303) | STA/LTA 0.816 |
-| **Size** | CNN → **GNN** → Transformer (multi-station, unit-peak + log-amp node feature) | R² **0.951**, MAE 0.10 (n=937, M2–5.2) | amp+dist 0.886 |
+| **Detect** | CNN → Transformer (single-station, 30 s, 1 Hz HP) | AUC **0.9998** (CI .9997–.9999), MCC 0.886 (.868–.902) (n=7,303) | STA/LTA 0.816 (.805–.828) |
+| **Size** | CNN → **GNN** → Transformer (multi-station, unit-peak + log-amp node feature) | R² **0.951** (.943–.959), MAE 0.10 (n=937, M2–5.2) | amp+dist 0.886 (.871–.898) |
 | **Quick check** | median over stations of a·log10(peak vel, first 4 s of P) + b·log10(dist) + c | test MAE 0.24 | — |
 
 - Data: 6,243 magnitude events (M2.0–7.1) / 50,743 detection windows (34,377 event, 14,304 noise,
   2,062 hard negatives = the old daemon's own Sep-22..Oct-5 false declarations). `build_dataset.py`.
+- Detect false triggers per 30 s window at the LIVE trigger 0.6: 1.41 % test noise, 0.25 % held-out live noise
+  (at the checkpoint's 0.9987: 0 % / 0.25 %). False EVENTS come from replay (3.5 confirmed/week, 0 pushes).
 - Size: nearest-1-station ablation R² 0.808; live-like (10 km loc error, 3–6 stations) R² 0.939.
+  Seed-averaged (10 seeds): single model R² 0.949 (t-CI 0.948–0.951), 10-seed ensemble 0.952 (bootstrap
+  0.944–0.959); ΔR² vs baseline +0.067 (+0.056…+0.079). CIs = event-clustered bootstrap (`src/eq/stats.py`).
 - **Replay harness (the acceptance test)** on 10 held-out days: 93 % of confirmed events real (chance 0 %),
   5 pushes / 0 false, magnitudes within ±0.13 of catalog, median location error 2.5 km. Event-centric
-  (616 test events, live geometry): mag bias +0.06, MAE 0.12, loc err 4.3 km. Old daemon, same days:
-  6 pushes, all false.
+  (833 test events, live geometry): 89 % located, mag bias +0.08, MAE 0.135, loc err 3.8 km. Old daemon,
+  same days: 6 pushes, all false.
 
 ### Locked rules — do not change without asking
 - **Chronological splits only**, never random (temporal leakage). 70/15/15 by time. Hard negatives split
@@ -107,6 +111,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Conservative public claims** — detection / characterization / rapid shaking estimation, NOT prediction.
 - **Design: LIGHT MODE ONLY** — Ollama-referenced, monochrome (black ink / gray body / one black accent,
   filled-black pills, 12px cards), tokens in plain `:root` in `app/src/index.css`, sourced from `DESIGN.md`.
+  Headings: self-hosted Literata serif; fluid column + clamp() type scale; prose #525252 (DESIGN.md "Project overrides").
   No dark theme or toggle. Off-palette color is flagged by the impeccable design hook.
 - **One station list:** `src/eq/network.py`. Builder, daemon, API, scorer, replay all import it. A station
   must stream on the public SeedLink relay (`build_dataset.py --stage check` enforces it).
@@ -114,6 +119,10 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   windows; `pipeline.det_prep` is the detector input everywhere; `seismic.lowpass` (18 Hz) on every trace.
   Checkpoints carry their normalizers + station list; the daemon refuses a checkpoint whose stations differ.
   (There is no hand-kept `SCALE` constant any more.)
+- **Models reach production only through the QuakeOps gate** (`retrain.py`, rules G1–G6 in HOW_IT_WORKS §12)
+  or an explicit `retrain.py rollback`. The gate compares champion vs challenger PAIRED on the challenger's
+  chronological test split and replays the held-out days; it never edits `pipeline_config.json`.
+  `scripts/tracking.py` is the only module that imports mlflow (no-op without `MLFLOW_TRACKING_URI`).
 
 ### How it fits together (Frontend / Online / Offline)
 - **OFFLINE (PC).** `build_dataset.py` (USGS catalog M1+ via `quakecast.py`; one SCEDC request per event,
@@ -129,7 +138,17 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   marks each caught / seen / missed against `events.jsonl`.
 - **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size carousel (reads `seismic.json`, evidence
   figures from `make_figures.py`), interactive coverage map (`Coverage.tsx`, `socal_cities.json`),
-  biggest-quakes carousel with caught badges, "Alert me near me" (region-first, mobile app only).
+  biggest-quakes carousel with caught badges, "Alert me near me" (region-first, mobile app only),
+  `/health` model-health page (from `/api/health`), 95% CIs under the card numbers. Design drafts at
+  `/home1`–`/home10` (`app/src/drafts/`, lazy chunk, own CSS scoped `.dN`; drafts 2/7/9 use off-palette accents
+  as exploration). `PRODUCT.md` = audience/voice/principles for the impeccable skill; `PORTFOLIO.md` = portfolio write-up.
+- **QUAKEOPS (MLOps loop, HOW_IT_WORKS §12, design in `QUAKEOPS_IMPLEMENTATION.md`).** PC: MLflow-tracked
+  training (`tracking.py`), monthly Dagster job (`quakeops_dagster.py` → `retrain.py`: data `--append` →
+  train `--compare` champion → replay → gate → promote), CIs via `src/eq/stats.py`, `make_figures.py publish`.
+  VM: `mlflow.service` (registry, Caddy basic auth), `seismicsocal-quakeops.timer` 09:30 UTC = `tracking.py pull`
+  (models.json; installs only with `QUAKEOPS_AUTO_DEPLOY=1` / `--apply`) + `drift_check.py` (Evidently vs
+  training noise, features logged by `live_watch.py`). CI: `.github/workflows/ci.yml` (ruff, pytest, selftest,
+  build; tar deploy on main once secrets exist).
 
 ### Alerts: station subscription + located, 3-station confirmation (2026-10-05)
 - **Subscribe to STATIONS, not a coordinate.** `push_tokens.json` = `[{token, stations:[codes], name}]`,
@@ -138,7 +157,10 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **CONFIRMED** = >= 3 P picks that one grid-search location fits (RMS <= 1.5 s), at most 1 healthy
   nearer station silent, nearest pick <= 120 km. 1–2 stations → TENTATIVE (logged, never pushed).
 - **Two-stage push** (needs `PUSH_ENABLED=1`; default OFF = shadow mode): (1) provisional push when CONFIRMED
-  and the quick check (first 4 s of P, `early_mag.json`) >= 3.04; (2) after full sizing, a confirmation if
+  and the quick check of the subscriber's ALERT SPEED clears its threshold — per-device `mode` in push_tokens.json:
+  `standard` (default; 4 s of P, response removed + 6 s taper margin, `early_mag.json` >= 3.04, ~33 s) or `fast`
+  (2 s of P, sensitivity-scaled, no margin, `early_mag_T2.json` >= 3.05, ~26 s, rougher size, more retractions).
+  Both run per event (`EARLY_PROFILES`); 20-day variant test in HOW_IT_WORKS §5.3; (2) after full sizing, a confirmation if
   M >= 3.0, else a retraction if (1) went out. Both carry the tag `quake-<event id>` so (2) replaces (1).
   Rationale + validation numbers: `data/processed/v2/pipeline_config_reason.json`, README.
 - Coda of a big quake can re-trigger: picks within 120 s / 100 km of a declared event are absorbed
@@ -150,10 +172,15 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Train:** `python scripts/demo_detect.py --retrain --seeds 5`, `python scripts/demo_magnitude.py --retrain --seeds 5`
   (CUDA torch is in `.venv`; RTX 4060).
 - **Replay / acceptance:** `python scripts/replay_archive.py scan|calibrate|run|events|compare-live` (see docstring).
-- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (16 tests).
+- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (24 tests); `ruff check scripts src tests`.
+- **QuakeOps:** `python scripts/retrain.py --month YYYY-MM [--stage S] [--dry-run]`;
+  `dagster dev -f scripts/quakeops_dagster.py`; `python scripts/tracking.py register-legacy|pull|status`;
+  `python scripts/drift_check.py [--build-reference]`. Needs `MLFLOW_TRACKING_URI` (+ basic-auth user/pass) in `.env`.
 
 ### Env / secrets
-- `.venv`: torch 2.12.1+cu126, scikit-learn, matplotlib, obspy, scipy, pandas, ruff. Node/Vite for `app/`.
+- `.venv`: torch 2.12.1+cu126, scikit-learn, matplotlib, obspy, scipy, pandas, ruff, mlflow 3.16, evidently 0.7.23,
+  dagster 1.13. Node/Vite for `app/`. `.env` QuakeOps keys: `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME/PASSWORD`
+  (PC), `OPS_EMAIL_TO`, `QUAKEOPS_AUTO_DEPLOY` (VM).
 - **Gitignored:** `.env` (SMTP, `PUSH_ENABLED`), `fcm-service-account.json`, `data/processed/*` (npz, pt,
   json), `data/raw/*`. Models + `data/processed/v2/{pipeline_config,tt_correction}.json` ship by scp —
   **verify sha256 on the VM** (DEPLOY.md).
@@ -167,7 +194,11 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   `build_dataset.py --stage check` / `select_network.py` before relying on a station.
 - USGS FDSN answers HTTP 400 (not a truncated list) above 20k rows; `quakecast` splits the interval.
 - Low RAM (16 GB, other apps): long background jobs can be reaped; everything is resumable/cached.
-- `crosscheck_events.py` line ~118 has a pre-existing unused variable (`c`) flagged by ruff F841.
+- `crosscheck_events.py` line ~118 has a pre-existing unused variable (`c`) flagged by ruff F841 (ignored per file in
+  `ruff.toml`, with the other legacy-script F errors). Its `--time-tol` / `--dist-tol` help text says 180 s / 100 km;
+  the real defaults are 30 s / 60 km.
+- MLflow prints emoji; `tracking.run` makes stdout tolerant (a cp1252 console used to crash at run end).
+- Low RAM: a local `mlflow server` + training at the same time can get reaped.
 
 ### Deployed (status as of 2026-10-05)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
@@ -193,5 +224,11 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   dist + APK together. This PC's `app/android` is a stale template without Firebase config — don't ship from it.
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
-- **Seed-averaged magnitude R² with a CI** write-up (QuakeOps Phase 2).
-- QuakeOps (MLflow / gate / drift): see `QUAKEOPS_PLAN.md`, `QUAKEOPS_IMPLEMENTATION.md` (to be re-based on v2).
+- **QuakeOps go-live (code done 2026-10-05, nothing on the VM yet; DEPLOY.md "QuakeOps"):** user steps =
+  MLflow venv + `mlflow.service` + Caddy block (hash) on the VM; `.env` keys on PC and VM; `pip install
+  mlflow-skinny evidently==0.7.23` in the VM venv; deploy the code; `tracking.py register-legacy` from the PC;
+  enable `seismicsocal-quakeops.timer`; GitHub secrets `VM_HOST`, `VM_SSH_KEY` (dedicated key, no passphrase).
+  `tracking.py pull` is untested against a live server (the local test server was reaped for RAM after
+  register-legacy succeeded). First retrain: `retrain.py --month 2026-09` (~hours: fetch + 2 trainings + re-scan
+  of 10 replay days).
+- Drift reference has only ~280–650 training noise windows per station; if `watch` flaps, grow `NOISE_TIMES`.

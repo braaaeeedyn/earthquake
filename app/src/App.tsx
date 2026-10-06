@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
-import { caTop, geocode, getAppVersion, getStations, liveStatus, sendContact, type Station, type UsgsEvent, type CaWindow } from './nearme'
-import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, subscribedName } from './push'
+import { caTop, geocode, getAppVersion, getHealth, getStations, liveStatus, sendContact, type Health, type ModelInfo, type Station, type UsgsEvent, type CaWindow } from './nearme'
+import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, subscribedName, subscribedMode, type AlertMode } from './push'
 import { getMyLocation } from './geo'
 import { APP_VERSION, mustUpdate, updateAvailable } from './version'
 import Coverage from './Coverage'
+
+// Design drafts (/home1../home10): a separate chunk, loaded only on those routes.
+const Drafts = lazy(() => import('./drafts/Drafts'))
 
 // The public site, for sending the app to the download/update page in an external browser.
 const APP_SITE = 'https://seismicsocal.duckdns.org'
@@ -15,7 +18,7 @@ type State =
   | { status: 'ready'; data: Seismic }
 
 // Detect -> Size is the live pipeline's order, so the numbering carries meaning.
-const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
+export const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
     desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 20 real days it caught about 8 in 10 quakes of M2 and up, with no false alerts.',
@@ -25,7 +28,7 @@ const ROWS: { n: string; kicker: string; key: string; q: string; figure: string;
       'Training data: 34,377 event windows (P-wave placed anywhere 1–25 s into the window), 14,304 noise windows from all hours with no catalogued M1+ quake nearby, and 2,062 hard negatives — the previous live system’s own false alarms. Chronological split, 2000–2026.',
       'Held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886; the classic STA/LTA trigger on the same input reaches AUC 0.816.',
       'Live: a window above 0.6 triggers a P-wave pick (STA/LTA onset refined by an Akaike picker). Picks from ≥3 stations are located by grid search; the event is confirmed only if one source fits them (RMS ≤ 1.5 s) and no working station closer to it stayed silent.',
-      'Replay of the exact live code on 20 archived days: located events within 2.5 km (median); 81–86 % of in-coverage M2+ quakes caught; 0 false push alerts.',
+      'Replay of the exact live code on 20 archived days: located events within 2.5 km (median); 75–86 % of in-coverage M2+ quakes caught (86 % of M3+); 0 false push alerts.',
     ],
   },
   {
@@ -35,26 +38,30 @@ const ROWS: { n: string; kicker: string; key: string; q: string; figure: string;
       'Input: for every working station within 200 km of the located epicentre, a 3-component velocity window from 5 s before its P arrival to 25 s after (instrument response removed, 18 Hz low-pass).',
       'Model: each window, scaled to unit peak, goes through a 1-D CNN (wave shape); its log peak velocity and log distance from the epicentre join it as graph-node features; two graph-convolution layers over the 19-station network (Gaussian distance weights, 150 km cut-off) and a Transformer mix the stations; the pooled vector plus 4 network amplitude/distance statistics give the magnitude. Average of 5 seeds.',
       'Training data: 6,243 catalogued SoCal quakes (M2.0–7.1, 2000–2026), with augmentation for live conditions — ±8 km epicentre jitter, ±0.5 s pick jitter, and only the nearest 3–n stations or random station drop-out.',
-      'Held-out test (937 quakes, 2022–2026): R² 0.951, MAE 0.10; amplitude + distance baseline R² 0.886, MAE 0.16; nearest single station only MAE 0.20. Live-like (10 km location error, 3–6 stations): MAE 0.11.',
+      'Held-out test (937 quakes, Aug 2021–2026): R² 0.951, MAE 0.10; amplitude + distance baseline R² 0.886, MAE 0.16; nearest single station only MAE 0.20. Live-like (10 km location error, 3–6 stations): MAE 0.11.',
       'Quick check (first alert): median over the picked stations of a·log10(peak velocity in the first 4 s of P) + b·log10(distance) + c, fitted on the training quakes. Test MAE 0.24; 93 % of M3+ quakes pass its validated threshold, 1 % of quakes under M2.5 do.',
-      'Push rule: provisional alert if the quick check ≥ 3.04; the full estimate then confirms (M ≥ 3.0) or retracts it, replacing the first notification. Replay: provisional alerts ~35 s after origin, confirmations ~55 s.',
+      'Push rule: provisional alert if the quick check ≥ 3.04; the full estimate then confirms (M ≥ 3.0) or retracts it, replacing the first notification. Replay: provisional alerts ~33 s after origin on the Standard setting (~26 s on Fast: 2 s of P, sensitivity-scaled), confirmations ~55 s.',
     ],
   },
 ]
 
 // Tiny pathname router: push a new path and re-render (no router dependency for a handful of pages).
-function navigate(path: string) {
+export function navigate(path: string) {
   window.history.pushState({}, '', path)
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
-type Route = 'home' | 'app' | 'privacy' | 'notfound'
+type Route = 'home' | 'app' | 'privacy' | 'health' | 'draft' | 'notfound'
+const DRAFT_RE = /^\/home([1-9]|10)$/
 const ROUTE_OF = (p: string): Route =>
-  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : 'notfound'
+  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : p === '/health' ? 'health'
+    : DRAFT_RE.test(p) ? 'draft' : 'notfound'
 const PAGE_TITLES: Record<Route, string> = {
   home: 'SeismicSoCal · Southern California earthquake ML',
   app: 'Get the app · SeismicSoCal',
   privacy: 'Privacy policy · SeismicSoCal',
+  health: 'Model health · SeismicSoCal',
+  draft: 'Design draft · SeismicSoCal',
   notfound: 'Page not found · SeismicSoCal',
 }
 
@@ -107,6 +114,14 @@ export default function App() {
 
   const softUpdate = gate && !gate.blocked && updateAvailable(APP_VERSION, gate.latest)
 
+  // Design drafts render their own full page (own nav/footer) around the same real components.
+  if (route === 'draft') {
+    const n = Number(DRAFT_RE.exec(path)![1])
+    return state.status === 'ready'
+      ? <Suspense fallback={<p className="state">Loading draft…</p>}><Drafts n={n} data={state.data} live={live} /></Suspense>
+      : <p className="state">{state.status === 'error' ? state.message : 'Loading…'}</p>
+  }
+
   return (
     <div className="app">
       <nav className="nav">
@@ -126,6 +141,7 @@ export default function App() {
       <main className="content">
         {route === 'app' && <AppDownload />}
         {route === 'privacy' && <Privacy />}
+        {route === 'health' && <ModelHealth />}
         {route === 'notfound' && <NotFound />}
         {route === 'home' && (
           <>
@@ -146,6 +162,8 @@ export default function App() {
         <p>Research &amp; education · real Southern California network data · not an official warning system</p>
         <p className="footer-links">
           <a href="/privacy" onClick={(e) => { e.preventDefault(); navigate('/privacy') }}>Privacy</a>
+          <span aria-hidden> · </span>
+          <a href="/health" onClick={(e) => { e.preventDefault(); navigate('/health') }}>Model health</a>
           <span aria-hidden> · </span>
           <button type="button" className="linklike" onClick={contactSupport}>Contact support</button>
         </p>
@@ -223,7 +241,7 @@ function ContactModal({ onClose }: { onClose: () => void }) {
 
 // Inline arrow - an SVG chevron that inherits the text color and centres cleanly (the unicode
 // ← / → glyphs sat off the text baseline). Flip horizontally for the left-pointing variant.
-function Arrow({ dir = 'right' }: { dir?: 'left' | 'right' }) {
+export function Arrow({ dir = 'right' }: { dir?: 'left' | 'right' }) {
   return (
     <svg className="ar" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"
       style={dir === 'left' ? { transform: 'scaleX(-1)' } : undefined}>
@@ -247,18 +265,116 @@ function NotFound() {
   )
 }
 
+// QuakeOps model health: which model version is live, its held-out metrics with 95% CIs against the
+// classic baseline, per-station drift of the live stream vs the training data, and promotion history.
+const HEALTH_CARDS: { key: 'detector' | 'magnitude'; name: string; rows: [string, string, number][] }[] = [
+  { key: 'detector', name: 'Detect', rows: [['test_auc', 'ROC-AUC', 4], ['sta_lta_auc', 'STA/LTA AUC', 3], ['test_mcc', 'MCC', 3], ['fpr_test_noise_at_trigger', 'False triggers / window (live trigger)', 4]] },
+  { key: 'magnitude', name: 'Size', rows: [['ens_r2', 'R²', 3], ['baseline_r2', 'Amp + distance R²', 3], ['ens_mae', 'MAE (magnitude)', 3], ['live_like_r2', 'Live-like R²', 3]] },
+]
+
+function ModelHealth() {
+  const [h, setH] = useState<Health | 'error' | null>(null)
+  useEffect(() => { getHealth().then(setH).catch(() => setH('error')) }, [])
+  const day = (s?: string) => (s ? s.slice(0, 10) : '—')
+  const metric = (m: ModelInfo, key: string, dp: number) => {
+    const v = m.metrics[key]
+    if (typeof v !== 'number') return '—'
+    const ci = m.metrics[`${key}_ci`]
+    return Array.isArray(ci) ? `${v.toFixed(dp)} (${ci[0].toFixed(dp)}–${ci[1].toFixed(dp)})` : v.toFixed(dp)
+  }
+  return (
+    <section className="legal health">
+      <p className="eyebrow">QuakeOps</p>
+      <h1>Model health</h1>
+      <p className="legal-updated">
+        Which model is live, how it scores on held-out data (95% confidence intervals), and whether the live
+        stream still looks like the data it was trained on. A new model goes live only after it passes the
+        promotion gate, including a replay of held-out days.
+      </p>
+      {h === null && <p className="state">Loading…</p>}
+      {h === 'error' && <p className="state muted">Health data is unavailable right now.</p>}
+      {h && h !== 'error' && (
+        <>
+          <h2>Live models</h2>
+          {!h.models && <p className="muted">The model registry hasn’t reported yet.</p>}
+          {h.models && (
+            <div className="health-grid">
+              {HEALTH_CARDS.map((c) => {
+                const m = h.models?.[c.key]
+                return (
+                  <article className="card health-card" key={c.key}>
+                    <p className="eyebrow">{c.name}</p>
+                    {m ? (
+                      <>
+                        <p className="health-ver">v{m.version}{m.deployed != null && m.deployed !== m.version ? ` (v${m.deployed} running)` : ''}</p>
+                        <dl className="health-dl">
+                          {c.rows.map(([k, label, dp]) => (
+                            <div key={k}><dt>{label}</dt><dd>{metric(m, k, dp)}</dd></div>
+                          ))}
+                          <div><dt>Trained</dt><dd>{day(m.trained)}</dd></div>
+                          <div><dt>Data · code</dt><dd>{m.dataset_version ?? '—'} · {m.git_commit ?? '—'}</dd></div>
+                        </dl>
+                      </>
+                    ) : <p className="muted">Not registered.</p>}
+                  </article>
+                )
+              })}
+            </div>
+          )}
+
+          <h2>Live stream vs training data</h2>
+          {!h.drift && <p className="muted">The daily drift check hasn’t run yet.</p>}
+          {h.drift && (
+            <>
+              <p>
+                {day(h.drift.date)}: the detector’s score, spikiness and frequency content of each station’s
+                live noise, compared with its training noise.
+              </p>
+              <ul className="drift-pills">
+                {Object.entries(h.drift.stations).map(([code, s]) => (
+                  <li key={code} className={`drift-pill ${s.status}`} title={s.drifted.length ? `changed: ${s.drifted.join(', ')}` : undefined}>
+                    <span className="drift-code">{code}</span> {s.status === 'insufficient' ? 'no data' : s.status}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          <h2>Promotion history</h2>
+          {!h.models?.history?.length && <p className="muted">No promotions recorded yet.</p>}
+          {!!h.models?.history?.length && (
+            <table className="health-table">
+              <thead><tr><th>Model</th><th>Version</th><th>Date</th><th>Why</th></tr></thead>
+              <tbody>
+                {h.models.history.map((r) => (
+                  <tr key={`${r.model}-${r.version}-${r.promoted_at}`}>
+                    <td>{r.model === 'detector' ? 'Detect' : 'Size'}</td><td>v{r.version}</td><td>{day(r.promoted_at)}</td><td>{r.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+      <p className="app-back">
+        <a className="back-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}><Arrow dir="left" />Back to the console</a>
+      </p>
+    </section>
+  )
+}
+
 // Privacy policy. Honest about what the app collects, that ML is used, and the third parties involved.
 function Privacy() {
   return (
     <section className="legal">
       <p className="eyebrow">Legal</p>
       <h1>Privacy policy</h1>
-      <p className="legal-updated">SeismicSoCal - research prototype. Last updated August 2026.</p>
+      <p className="legal-updated">SeismicSoCal - research prototype. Last updated October 2026.</p>
 
       <h2>What we collect</h2>
       <p>
         SeismicSoCal collects data <strong>only if you subscribe to alerts inside the app</strong>.
-        When you subscribe we store: the name you enter, the sensor stations you choose to follow,
+        When you subscribe we store: the name you enter, the sensor stations you choose to follow, your alert-speed setting,
         and your device’s push-notification token. We do <strong>not</strong> store your location —
         it is used only on your device, at signup, to rank which stations are nearest you, and is
         never sent to us. The public website collects no personal data and has no subscribe function -
@@ -295,7 +411,7 @@ function Privacy() {
       <h2>Unsubscribing and deletion</h2>
       <p>
         You can unsubscribe at any time with the <strong>Unsubscribe</strong> button in the app, which
-        removes your device token and location from our records. If you <strong>uninstall the app</strong>,
+        removes your device token, name and followed sensors from our records. If you <strong>uninstall the app</strong>,
         your device is unsubscribed automatically: the push token is invalidated and we purge it the
         next time an alert would have been sent.
       </p>
@@ -353,7 +469,7 @@ function AppDownload() {
       <p className="eyebrow">Get the app</p>
       <h1>SeismicSoCal for Android</h1>
       <p className="app-lede">
-        Alerts run only in the app: install it to subscribe your location and receive push
+        Alerts run only in the app: install it to follow the sensors near you and receive push
         notifications when the live models detect a nearby earthquake. This is a research
         prototype, not an official warning system.
       </p>
@@ -369,7 +485,7 @@ function AppDownload() {
         <ol className="app-steps">
           <li>Download the APK on your Android device.</li>
           <li>Open it - Android will ask to allow installs from this source. Enable it for your browser.</li>
-          <li>Install, open SeismicSoCal, set your location, and tap Subscribe to turn on alerts.</li>
+          <li>Install, open SeismicSoCal, find the sensors near you (city search or your location), follow a region, and tap Subscribe.</li>
         </ol>
         <p className="muted app-note">
           Android only. iOS is not available. The APK is an unsigned debug build for demonstration;
@@ -417,7 +533,7 @@ function Console({ data }: { data: Seismic }) {
 
 // The Detect -> Size sequence as an auto-cycling carousel.
 // Tracks the previous index so the outgoing card slides left and the incoming enters from the right.
-function Carousel({ data }: { data: Seismic }) {
+export function Carousel({ data }: { data: Seismic }) {
   const byKey = Object.fromEntries(data.tasks.map((t) => [t.key, t]))
   const rows = ROWS.filter((r) => byKey[r.key])
   const n = rows.length
@@ -528,6 +644,12 @@ function Result({
           vs {t.baseline_name} {fmt(t.baseline)} · <span className={`verdict ${t.winner}`}>{verdict}</span>
         </span>
       </div>
+      {t.deep_ci && t.baseline_ci && (
+        <p className="stat-ci">
+          95% CI {fmt(t.deep_ci[0])}–{fmt(t.deep_ci[1])} · {t.baseline_name} {fmt(t.baseline_ci[0])}–{fmt(t.baseline_ci[1])}
+          {t.n ? ` · n = ${t.n.toLocaleString()}` : ''}
+        </p>
+      )}
       <p className="result-desc">{row.desc}</p>
       <Evidence figure={row.figure} kicker={row.kicker} tech={row.tech} open={evOpen} onToggle={onToggleEv} />
     </article>
@@ -536,7 +658,7 @@ function Result({
 
 // Disclosure whose panel grows smoothly (grid-rows 0fr -> 1fr) instead of snapping open.
 // Open state is shared across all three cards (controlled by the parent).
-function Evidence({
+export function Evidence({
   figure,
   kicker,
   tech,
@@ -571,7 +693,7 @@ function Evidence({
 
 // A synthetic seismograph that shakes in place - stationary, but the closer the mouse, the
 // larger and more erratic the amplitude; calm and near-flat when the mouse is far away.
-function Trace() {
+export function Trace() {
   const svgRef = useRef<SVGSVGElement>(null)
   const pathRef = useRef<SVGPathElement>(null)
   const target = useRef(0) // proximity target from the mouse, 0 (far) .. 1 (over the trace)
@@ -714,7 +836,7 @@ const CA_WINDOWS = [
 ]
 
 // The biggest California quakes across widening time windows, cycled like the model cards.
-function CaLargest() {
+export function CaLargest() {
   const n = CA_WINDOWS.length
   const CYCLE = 7
   const [idx, setIdx] = useState<{ active: number; prev: number; dir: 'next' | 'prev' }>({ active: 0, prev: 0, dir: 'next' })
@@ -782,7 +904,7 @@ function CaLargest() {
             <div key={w.key} className={`carousel-card ${cls(i)}`} aria-hidden={idx.active !== i}>
               <div className="ca-panel">
                 {d === undefined && <p className="muted">Loading…</p>}
-                {d === 'err' && <p className="muted">Feed unavailable - is the backend running?</p>}
+                {d === 'err' && <p className="muted">The USGS feed is unavailable right now. Try again in a minute.</p>}
                 {d && d !== 'err' && <QuakeList title={d.label} events={d.events} />}
               </div>
             </div>
@@ -815,6 +937,13 @@ function CaLargest() {
   )
 }
 
+// Alert-speed choices (first message only). Numbers: median after the quake starts on 20 replayed days
+// (HOW_IT_WORKS.md section 5.3); live adds a few seconds of stream delay.
+const SPEEDS: { key: AlertMode; name: string; when: string; desc: string }[] = [
+  { key: 'standard', name: 'Standard', when: 'first notice ~30–35 s', desc: 'Most safeguards. Fewer notices that later get retracted, and a closer first size.' },
+  { key: 'fast', name: 'Fast', when: 'first notice ~25 s', desc: 'Earlier, from a rougher 2-second size. Expect more retractions, occasionally for a quake that turns out too small to feel.' },
+]
+
 // "Use my location" selects the nearest REGION (all of its sensors), but only if one of its sensors is
 // within this cap (roughly an M3.5's felt distance) — farther than that, the user picks manually.
 const NEAR_CAP_KM = 150
@@ -841,7 +970,7 @@ function sameSet(a: Set<string>, b: Set<string>) {
   return a.size === b.size && [...a].every((x) => b.has(x))
 }
 
-function NearMe() {
+export function NearMe() {
   // Restore the persisted subscription so the choice survives closing the app: the stations the
   // device is subscribed to are shown pre-selected (and locked-in), not blank.
   const savedSubs = subscribedStations()
@@ -857,9 +986,11 @@ function NearMe() {
   const [stateName, setStateName] = useState('CA')
   const [searching, setSearching] = useState(false)
   const [opened, setOpened] = useState<Set<string>>(new Set())   // regions the user expanded by hand
+  const [mode, setMode] = useState<AlertMode>(subscribedMode())   // alert speed for the first message
+  const [liveMode, setLiveMode] = useState<AlertMode>(subscribedMode())
 
   const subscribed = subscribedSet.size > 0                    // subscribed iff we track live stations
-  const dirty = !sameSet(selected, subscribedSet)              // selection differs from what's live
+  const dirty = !sameSet(selected, subscribedSet) || mode !== liveMode   // selection or speed differs from what's live
 
   useEffect(() => {
     getStations()
@@ -963,13 +1094,14 @@ function NearMe() {
     setMsg(null)
     try {
       // register-push upserts by device token, so the same call both subscribes and swaps the set.
-      const pushed = await enablePush({ name, stations: [...selected] })
+      const pushed = await enablePush({ name, stations: [...selected], mode })
       if (pushed === null) {
         // web build: no native push, so there's nothing to subscribe to here
         setMsg({ kind: 'err', text: 'Alerts arrive as push notifications - install the SeismicSoCal app to subscribe.' })
         return
       }
       setSubscribedSet(new Set(selected))
+      setLiveMode(mode)
       const n = selected.size
       setMsg({
         kind: 'ok',
@@ -1011,8 +1143,8 @@ function NearMe() {
       <h2>Alert me near me</h2>
       <p className="nearme-lede">
         The models watch a live 19-sensor Southern California stream. When a quake is located near a
-        sensor you follow, you get a first notice within seconds and a confirmed magnitude shortly after
-        (or a retraction if it turns out too small to feel). Follow a region, then fine-tune its sensors.
+        sensor you follow, you get a first notice about half a minute after it begins (or sooner on the Fast
+        setting) and a confirmed magnitude by about a minute (or a retraction if it turns out too small to feel). Follow a region, then fine-tune its sensors.
         This is rapid detection, not an official warning.
         {!isNativeApp() && ' Alerts are available in the SeismicSoCal app.'}
       </p>
@@ -1118,6 +1250,20 @@ function NearMe() {
                 )
               })}
             </ul>
+          </fieldset>
+
+          <fieldset className="speed-picker">
+            <legend>Alert speed <span className="picker-hint"> · for the first notice; the confirmed size is the same</span></legend>
+            <div className="speed-options" role="radiogroup" aria-label="Alert speed">
+              {SPEEDS.map((s) => (
+                <button key={s.key} type="button" role="radio" aria-checked={mode === s.key}
+                  className={`speed-option${mode === s.key ? ' on' : ''}`} onClick={() => setMode(s.key)}>
+                  <span className="speed-name">{s.name}</span>
+                  <span className="speed-when">{s.when}</span>
+                  <span className="speed-desc">{s.desc}</span>
+                </button>
+              ))}
+            </div>
           </fieldset>
 
           <div className="actions">

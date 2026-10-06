@@ -48,7 +48,7 @@ export async function getStations(): Promise<Station[]> {
 }
 
 // Register this device's FCM token + the station codes it subscribes to (no coordinates stored).
-export async function registerPushToken(p: { token: string; stations: string[]; name: string }) {
+export async function registerPushToken(p: { token: string; stations: string[]; name: string; mode: 'standard' | 'fast' }) {
   const res = await fetch(api('/api/register-push'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -127,6 +127,44 @@ export async function liveStatus(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// QuakeOps model health: registry champions (tracking.py pull), per-station drift (drift_check.py), and the
+// versions the live daemon loaded. Each part is null until that job has run on the server.
+export type DriftStatus = 'ok' | 'watch' | 'drifting' | 'insufficient'
+export interface ModelInfo {
+  version: number
+  deployed?: number | null
+  trained?: string
+  git_commit?: string
+  dataset_version?: string
+  promoted_at?: string
+  reason?: string
+  metrics: Record<string, number | [number, number]>
+}
+export interface Health {
+  models: {
+    detector?: ModelInfo | null
+    magnitude?: ModelInfo | null
+    history: { model: string; version: number; promoted_at: string; reason: string; rolled_back_from?: string | null }[]
+    checked_at: string
+    notes?: string[]
+  } | null
+  drift: { date: string; method: string; stations: Record<string, { status: DriftStatus; n: number; drifted: string[] }> } | null
+  loaded: { detector: number | null; magnitude: number | null } | null
+}
+
+export async function getHealth(): Promise<Health> {
+  const res = await fetch(api('/api/health'))
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()) as Health
+}
+
+// Full live status: per-station up/latency from the daemon (refreshed every 30 s). Used by design drafts.
+export async function liveDetail(): Promise<{ live: boolean; stations?: Record<string, { up: boolean; latency_s: number | null }> }> {
+  const res = await fetch(api('/api/status'))
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return await res.json()
 }
 
 // The server's app-version policy: `latest` released and `min` allowed to run.

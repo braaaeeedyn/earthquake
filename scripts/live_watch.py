@@ -14,6 +14,10 @@ offline is exactly what runs here):
        notification tag); a provisional push whose full size falls below the floor is RETRACTED.
        All pushes need PUSH_ENABLED=1 (env) and go to devices subscribed to a station within reach.
 
+QuakeOps: one window per station every 30 s is logged as scale-free drift features (drift_check.py);
+the daemon exits when data/processed/models.json names a newly deployed model version (tracking.py pull),
+and server.py's supervisor respawns it on the new checkpoint.
+
 Honesty: SeedLink latency is seconds to tens of seconds and sizing waits for P+25 s, so pushes go out
 roughly 30-60 s after origin: RAPID DETECTION, not pre-arrival early warning. Coverage is strongest
 where >= 3 stations are within ~100 km (LA basin, Inland Empire, Mojave, Ridgecrest, Kern).
@@ -38,21 +42,25 @@ sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
 import shaking_model  # noqa: E402
 from eq import locate, network, seismic  # noqa: E402
-from eq.pipeline import ZNE_POST_S, ZNE_PRE_S, Config, Event, MagnitudeEnsemble, Pipeline  # noqa: E402
+from eq.pipeline import (ZNE_POST_S, ZNE_PRE_S, Config, Event, MagnitudeEnsemble, Pipeline, det_prep,  # noqa: E402
+                         window_features)
 
 DETECTOR = ROOT / "data" / "processed" / "detector.pt"
 MAG_CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
 EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
 STATUS = ROOT / "data" / "processed" / "live_status.json"
+MODELS_JSON = ROOT / "data" / "processed" / "models.json"     # written by tracking.py pull (QuakeOps)
+FEAT_DIR = ROOT / "data" / "processed" / "features"
+FEATURE_EVERY = 15                # log 1 in 15 scanned windows per station (= one per 30 s) for drift_check.py
 BUFFER_S = 300.0                  # seconds of 3-component history kept per station
 STALE_S = 90.0                    # a station whose newest sample is older than this is "down"
 ALERT_REACH_KM = 150.0            # devices subscribed to a station within this of the epicentre are alerted
 
 
-def load_detector(device="cpu"):
+def load_detector(device="cpu", path=DETECTOR):
     import torch
     from seismic_train import DetectorNet
-    ck = torch.load(DETECTOR, weights_only=False, map_location=device)
+    ck = torch.load(path, weights_only=False, map_location=device)
     if list(ck["stations"]) != network.CODES:
         raise RuntimeError(f"detector trained on {list(ck['stations'])}, network is {network.CODES}")
     m = DetectorNet().to(device)
@@ -105,17 +113,18 @@ class LiveSource:
         n = int(round((t2 - t1) * seismic.SR))
         return x[i1:i1 + n] if i1 >= 0 and i1 + n <= len(x) else None
 
-    def zne(self, c, t1, t2):
-        """3-C velocity for [t1, t2]. The response is removed on [t1 - ZNE_PRE_S, t2 + ZNE_POST_S] only --
+    def zne(self, c, t1, t2, sens=False):
+        """3-C velocity for [t1, t2]. sens=True (quick check): sensitivity-scaled on [t1 - ZNE_PRE_S, t2], no
+        post-window wait. Otherwise the response is removed on [t1 - ZNE_PRE_S, t2 + ZNE_POST_S] only --
         the same segment the replay harness corrects -- NOT on the whole 300 s buffer, whose end taper
         (5 % = 15 s) used to attenuate the newest seconds of the sizing window and bias magnitudes low."""
         import obspy
-        a, b = obspy.UTCDateTime(t1 - ZNE_PRE_S), obspy.UTCDateTime(t2 + ZNE_POST_S)
+        a, b = obspy.UTCDateTime(t1 - ZNE_PRE_S), obspy.UTCDateTime(t2 + (0.0 if sens else ZNE_POST_S))
         st = self._snap(c).slice(a, b)
         if len(st) < 3 or min(tr.stats.endtime for tr in st) < b - 0.05:
             return None
         n_seg = int(round((b - a) * seismic.SR))
-        x = seismic.to_zne(st, self.inv, a, n_seg)
+        x = seismic.to_zne(st, self.inv, a, n_seg, output="SENS" if sens else "VEL")
         if x is None:
             return None
         i1, n = int(round(ZNE_PRE_S * seismic.SR)), int(round((t2 - t1) * seismic.SR))
@@ -133,6 +142,42 @@ class LiveSource:
             out[c] = {"up": e is not None and now - e < STALE_S,
                       "latency_s": None if e is None else round(now - e, 1)}
         return out
+
+
+# ---------------------------------------------------------------- QuakeOps: drift features + model version
+
+class FeatureLog:
+    """Appends (ts, station, prob, crest, hf_ratio) for every FEATURE_EVERY-th clean window per station.
+    Never raises: drift logging must not be able to break detection."""
+
+    def __init__(self):
+        self.n = {}
+
+    def __call__(self, i, end, w, p):
+        k = self.n.get(i, 0)
+        self.n[i] = k + 1
+        if k % FEATURE_EVERY:
+            return
+        try:
+            crest, hf = window_features(det_prep(np.asarray(w)[None]))
+            fp = FEAT_DIR / f"{datetime.datetime.fromtimestamp(end, datetime.timezone.utc):%Y-%m-%d}.csv"
+            new = not fp.exists()
+            FEAT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(fp, "a", encoding="utf-8") as f:
+                if new:
+                    f.write("ts,station,prob,crest,hf_ratio\n")
+                f.write(f"{end:.1f},{network.CODES[i]},{p:.5f},{crest[0]:.4f},{hf[0]:.4f}\n")
+        except Exception:                                # noqa: BLE001
+            pass
+
+
+def deployed_versions():
+    """{'detector': v, 'magnitude': v} from models.json (None when the registry isn't in use)."""
+    try:
+        m = json.loads(MODELS_JSON.read_text())
+        return {k: (m.get(k) or {}).get("deployed") for k in ("detector", "magnitude")}
+    except (OSError, ValueError):
+        return {"detector": None, "magnitude": None}
 
 
 # ---------------------------------------------------------------- events: log + push
@@ -159,8 +204,12 @@ def log_event(ev: Event, pushed, eligible):
         "silent_near": ev.silent_near,
         "nearest_station": code, "nearest_km": round(dkm, 1),
         "early_mag": None if ev.early_mag is None else round(ev.early_mag, 2),
-        "early_pushed": int(getattr(ev, "early_sent", 0)),
+        "early_pushed": int(getattr(ev, "early_sent", {}).get("standard", 0)),
         "early_after_origin_s": None if ev.early_at is None else round(ev.early_at - ev.t0, 1),
+        # the fast alert-speed profile's quick check (2 s of P, no margin) -- sent only to "fast" subscribers
+        "early_fast_mag": None if "fast" not in ev.early else round(ev.early["fast"]["mag"], 2),
+        "early_fast_pushed": int(getattr(ev, "early_sent", {}).get("fast", 0)),
+        "early_fast_after_origin_s": None if "fast" not in ev.early else round(ev.early["fast"]["at"] - ev.t0, 1),
         "mag": None if ev.mag is None else round(ev.mag, 2),
         "mag_spread": None if ev.mag_spread is None else round(ev.mag_spread, 2),
         "sized_after_origin_s": None if ev.sized_at is None else round(ev.sized_at - ev.t0, 1),
@@ -176,9 +225,9 @@ def log_event(ev: Event, pushed, eligible):
     return rec
 
 
-def push_message(ev: Event, user_stations, stage="final"):
+def push_message(ev: Event, user_stations, stage="final", mode="standard"):
     """Message for one device; distance = located epicentre -> the device's nearest subscribed sensor.
-      stage 'early'   : provisional notice from the quick check (size pending)
+      stage 'early'   : provisional notice from the quick check of the device's alert-speed `mode` (size pending)
       stage 'final'   : confirmed magnitude (replaces the provisional notice)
       stage 'retract' : the full sizing came in below the felt floor (replaces the provisional notice)"""
     subs = [s for s in user_stations if s in network.INDEX]
@@ -186,10 +235,17 @@ def push_message(ev: Event, user_stations, stage="final"):
     code, _ = nearest_station(ev.lat, ev.lon)
     region = dict((s[0], s[4]) for s in network.LIVE_NETWORK)[code]
     if stage == "early":
-        title = f"Earthquake detected ({region}) — confirming size"
-        body = (f"{len(ev.stations)} sensors located a quake about {d:.0f} km from your nearest sensor. "
-                f"Preliminary size M~{ev.early_mag:.1f}; the confirmed magnitude follows in under a minute. "
-                f"Rapid detection, not an official warning.")
+        q = ev.early[mode]["mag"]
+        if mode == "fast":
+            title = f"Fast alert: earthquake detected ({region})"
+            body = (f"{len(ev.stations)} sensors located a quake about {d:.0f} km from your nearest sensor. "
+                    f"Rough size M~{q:.1f} (fast setting: earlier, less certain); the confirmed magnitude follows "
+                    f"in under a minute. Rapid detection, not an official warning.")
+        else:
+            title = f"Earthquake detected ({region}) — confirming size"
+            body = (f"{len(ev.stations)} sensors located a quake about {d:.0f} km from your nearest sensor. "
+                    f"Preliminary size M~{q:.1f}; the confirmed magnitude follows in under a minute. "
+                    f"Rapid detection, not an official warning.")
         return title, body
     if stage == "retract":
         size = f"M{ev.mag:.1f}" if ev.mag is not None else "a size that could not be confirmed"
@@ -205,30 +261,33 @@ def push_message(ev: Event, user_stations, stage="final"):
     return title, body
 
 
-def alert_devices(ev: Event, tokens, dry_run, stage="final"):
+def alert_devices(ev: Event, tokens, dry_run, stage="final", mode=None):
     """Push each device subscribed to any station within ALERT_REACH_KM of the epicentre, once per
     stage. Every stage of one event carries the same notification tag, so later stages REPLACE earlier
-    ones on the device instead of stacking."""
+    ones on the device instead of stacking. `mode` limits the push to devices on that alert-speed
+    profile (subscriptions without one are 'standard')."""
     d = locate.haversine_km(ev.lat, ev.lon, network.COORDS[:, 0], network.COORDS[:, 1])
     reach = {network.CODES[i] for i in np.flatnonzero(d <= ALERT_REACH_KM)}
     sent = 0
     for t in tokens:
         subs = [s for s in t.get("stations", []) if s in network.INDEX]
-        if not subs or reach.isdisjoint(subs):
+        if not subs or reach.isdisjoint(subs) or (mode and t.get("mode", "standard") != mode):
             continue
-        title, body = push_message(ev, subs, stage)
+        title, body = push_message(ev, subs, stage, mode or "standard")
         if push_fcm.send_push(t["token"], title, body, dry_run, tag=f"quake-{ev.id}"):
             sent += 1
     return sent
 
 
-def handle_early(pipe, ev, dry_run, push_enabled):
-    """Stage 1: the quick check ran. Provisional push iff confirmed location and early M >= threshold."""
-    ev.early_sent = 0
-    if pipe.early_push_eligible(ev) and push_enabled:
-        ev.early_sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "early")
-    print(f"[EARLY] {ev.id} quick-check M~{ev.early_mag:.1f} eligible={pipe.early_push_eligible(ev)} "
-          f"pushed={ev.early_sent}", flush=True)
+def handle_early(pipe, ev, mode, dry_run, push_enabled):
+    """Stage 1 for one alert-speed profile: its quick check ran. Provisional push to that profile's devices
+    iff confirmed location and its quick M >= its threshold."""
+    if not hasattr(ev, "early_sent"):
+        ev.early_sent = {}
+    ok = pipe.early_push_eligible(ev, mode)
+    ev.early_sent[mode] = alert_devices(ev, push_fcm.load_tokens(), dry_run, "early", mode) if ok and push_enabled else 0
+    print(f"[EARLY:{mode}] {ev.id} quick-check M~{ev.early[mode]['mag']:.1f} eligible={ok} "
+          f"pushed={ev.early_sent[mode]}", flush=True)
 
 
 def handle_event(pipe, ev, dry_run, push_enabled):
@@ -237,9 +296,11 @@ def handle_event(pipe, ev, dry_run, push_enabled):
     eligible = pipe.push_eligible(ev)
     sent = 0
     if push_enabled and eligible:
-        sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "final")
-    elif push_enabled and getattr(ev, "early_sent", 0):
-        sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "retract")
+        sent = alert_devices(ev, push_fcm.load_tokens(), dry_run, "final")       # every profile gets the confirmation
+    elif push_enabled:                                                             # retract only where a provisional went
+        for mode, n in getattr(ev, "early_sent", {}).items():
+            if n:
+                sent += alert_devices(ev, push_fcm.load_tokens(), dry_run, "retract", mode)
     log_event(ev, sent, eligible)
     tag = "EVENT" if ev.confirmed else "TENTATIVE"
     size = f"M{ev.mag:.1f}±{ev.mag_spread:.1f}" if ev.mag is not None else "unsized"
@@ -262,9 +323,13 @@ def run_live(args):
     push_enabled = os.environ.get("PUSH_ENABLED", "0") == "1"
     pipe = Pipeline(det, mag, network.COORDS, network.CODES, src, cfg,
                     on_event=lambda ev: handle_event(pipe, ev, args.dry_run, push_enabled),
-                    on_early=lambda ev: handle_early(pipe, ev, args.dry_run, push_enabled))
-    if pipe.early is None:
-        print("no early_mag.json -> single-stage pushes (final magnitude only)", flush=True)
+                    on_early=lambda ev, mode: handle_early(pipe, ev, mode, args.dry_run, push_enabled))
+    flog, on_window = FeatureLog(), pipe.on_window
+    pipe.on_window = lambda i, end, w, p: (flog(i, end, w, p), on_window(i, end, w, p))
+    models = deployed_versions()
+    print(f"models {models}", flush=True)
+    print(f"alert-speed profiles: {sorted(pipe.early) or 'none (no early_mag*.json) -> final magnitude only'}",
+          flush=True)
     print(f"config {cfg}\npush {'ENABLED' if push_enabled else 'DISABLED (shadow mode)'}", flush=True)
 
     def loop():
@@ -281,7 +346,10 @@ def run_live(args):
             if time.time() - last_status > 30:
                 last_status = time.time()
                 STATUS.write_text(json.dumps({"t": time.time(), "stations": src.health(),
-                                              "push_enabled": push_enabled}))
+                                              "push_enabled": push_enabled, "models": models}))
+                if deployed_versions() != models:        # a new champion was installed: restart on it
+                    print(f"models changed {models} -> {deployed_versions()}; exiting for respawn", flush=True)
+                    os._exit(3)
 
     class Client_(EasySeedLinkClient):
         def on_data(self, trace):
@@ -309,7 +377,7 @@ class _FakeSource:
     def z(self, c, t1, t2):
         return None
 
-    def zne(self, c, t1, t2):
+    def zne(self, c, t1, t2, sens=False):
         return None
 
 
@@ -365,6 +433,13 @@ def selftest(args):
     t2, b2 = push_message(ev, [network.CODES[int(near[0])]], "retract")
     assert "confirming" in t1 and "disregard" in b2
     print(f"[selftest] two-stage: provisional {t1!r} -> retraction {t2!r} (same notification tag)")
+    ev.early["fast"] = {"mag": 3.3, "at": ev.t0 + 25}
+    tf, bf = push_message(ev, [network.CODES[int(near[0])]], "early", "fast")
+    assert "Fast alert" in tf and "less certain" in bf
+    near_sub = [network.CODES[int(near[0])]]
+    devs = [{"token": "s", "stations": near_sub}, {"token": "f", "stations": near_sub, "mode": "fast"}]
+    assert alert_devices(ev, devs, dry_run=True, stage="early", mode="fast") == 0     # dry run: counts real sends
+    print(f"[selftest] fast profile: {tf!r} goes only to devices whose mode is 'fast'")
 
 
 def main():

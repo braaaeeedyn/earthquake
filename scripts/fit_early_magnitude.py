@@ -10,6 +10,7 @@ magnitude ensemble), choose T on VALIDATION, report once on TEST. Writes data/pr
 
   python scripts/fit_early_magnitude.py
 """
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -30,6 +31,11 @@ def split_chrono(t, fr=(0.7, 0.15)):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=str(OUT), help="where to write the fit (retrain.py: the challenger dir)")
+    ap.add_argument("--T", type=float, help="force the P-window length (s) instead of choosing it on validation")
+    args = ap.parse_args()
+    out_fp = Path(args.out)
     d = np.load(NPZ)
     mag, ev_t = d["mag"], d["ev_time"]
     row_ev, dist, ok = d["row_ev"], d["row_dist"], d["row_pick_ok"]
@@ -62,7 +68,7 @@ def main():
         print(f"T={T:.0f}s  coef a={coef[0]:.3f} b={coef[1]:.3f} c={coef[2]:.3f}   "
               f"val MAE {out['va']['mae']:.3f} bias {out['va']['bias']:+.2f}   "
               f"test MAE {out['te']['mae']:.3f} bias {out['te']['bias']:+.2f}")
-    T = min(results, key=lambda k: results[k][1]["va"]["mae"])          # chosen on VALIDATION
+    T = args.T if args.T else min(results, key=lambda k: results[k][1]["va"]["mae"])   # chosen on VALIDATION
     coef, out = results[T]
     # early push threshold: chosen on VALIDATION so that >= 95% of M>=3 events pass the quick check
     va = out["va"]
@@ -74,7 +80,7 @@ def main():
            "test_M3_pass_rate": float(np.mean(te["est"][big] >= thr)) if big.any() else None,
            "test_M_lt_2.5_pass_rate": float(np.mean(te["est"][small] >= thr)) if small.any() else None,
            "fit_on": "train events, picked-P rows; T and threshold chosen on validation"}
-    OUT.write_text(json.dumps(rep, indent=1))
+    out_fp.write_text(json.dumps(rep, indent=1))
     print(json.dumps(rep, indent=1))
 
 

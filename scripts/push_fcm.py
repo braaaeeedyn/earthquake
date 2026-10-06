@@ -35,11 +35,12 @@ def load_tokens():
     return []
 
 
-def save_token(token, stations, name=""):
+def save_token(token, stations, name="", mode="standard"):
     """Upsert a device by token (a device's FCM token is its identity). `stations` is the list of
-    sensor codes this device subscribes to (e.g. ['CCC','MWC']). Returns the full list."""
+    sensor codes this device subscribes to (e.g. ['CCC','MWC']); `mode` is its alert speed for the first
+    message ('standard' = most safeguards, 'fast' = earlier, less certain). Returns the full list."""
     toks = load_tokens()
-    entry = {"token": token, "stations": [str(s) for s in stations], "name": name}
+    entry = {"token": token, "stations": [str(s) for s in stations], "name": name, "mode": mode}
     toks = [t for t in toks if t.get("token") != token]     # replace stale subscription for same device
     toks.append(entry)
     TOKENS.parent.mkdir(parents=True, exist_ok=True)

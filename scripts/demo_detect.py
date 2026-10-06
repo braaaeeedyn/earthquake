@@ -14,6 +14,10 @@ train Sep 22-28, val Sep 29-Oct 1, test >= Oct 2 2026 (the old daemon log starts
 
   python scripts/demo_detect.py --retrain --seeds 5      # train (GPU if available) + evaluate
   python scripts/demo_detect.py                          # evaluate the saved checkpoint
+  python scripts/demo_detect.py --out C.pt --compare data/processed/detector.pt   # paired vs the champion
+
+Every headline number carries a 95% bootstrap CI, clustered by event (all station windows of one quake,
+or of one noise time, resample together). With MLFLOW_TRACKING_URI set the run is logged (scripts/tracking.py).
 """
 import argparse
 import json
@@ -32,8 +36,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from seismic_train import DetectorNet, sta_lta_scores, SR  # noqa: E402
 from sklearn.metrics import matthews_corrcoef, roc_auc_score, roc_curve  # noqa: E402
 
-from eq import network  # noqa: E402
-from eq.pipeline import det_prep  # noqa: E402
+import tracking  # noqa: E402
+from eq import network, stats  # noqa: E402
+from eq.pipeline import Config, det_prep  # noqa: E402
 
 NPZ = ROOT / "data" / "processed" / "v2" / "detection.npz"
 CKPT = ROOT / "data" / "processed" / "detector.pt"
@@ -86,6 +91,19 @@ def pos_starts(n, p_index, rng, fixed=None):
 def neg_starts(arr, n, rng, fixed=False):
     L = arr.shape[1]
     return np.zeros(n, int) if fixed else rng.integers(0, L - NPTS + 1, n)
+
+
+def clusters(d, sp, split):
+    """Bootstrap cluster per evaluation row: the event's origin time (positives) / the noise time."""
+    pi, ni = sp[split]
+    return np.r_[d["pos_time"][pi], -d["noise_time"][ni]]
+
+
+def load_ckpt(path, device):
+    ck = torch.load(path, weights_only=False, map_location=device)
+    model = DetectorNet().to(device)
+    model.load_state_dict(ck["state"])
+    return model, ck["thr"]
 
 
 def eval_sets(pos, noise, hard, sp, hs, p_index, split, onset=5.0):
@@ -149,8 +167,17 @@ def main():
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--retrain", action="store_true")
     ap.add_argument("--out", default=str(CKPT))
+    ap.add_argument("--compare", help="checkpoint to compare against, paired on the same test set (the champion)")
     args = ap.parse_args()
+    summary_fp = SUMMARY if Path(args.out) == CKPT else Path(args.out).with_suffix(".json")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    params = {"arch": "cnn-transformer", "lr": 1e-3, "weight_decay": 1e-4, "epochs": args.epochs, "batch": 256,
+              "seeds": args.seeds, "retrain": args.retrain}
+    with tracking.run("detect", "train" if args.retrain else "evaluate", params):
+        run(args, summary_fp, device)
+
+
+def run(args, summary_fp, device):
     d, pos, noise, hard, sp, hs, p_index = load()
     print(f"windows: pos {len(pos)}  noise {len(noise)}  hard {len(hard)}  | train pos/noise/hard "
           f"{len(sp['tr'][0])}/{len(sp['tr'][1])}/{len(hs['tr'])}  device {device}")
@@ -172,16 +199,15 @@ def main():
         thr = best_threshold(pv, np.r_[yva, np.zeros(len(Hva))])
         torch.save({"state": model.state_dict(), "thr": thr, "best_seed": bseed, "stations": network.CODES,
                     "npts": NPTS, "trained": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "git": git_commit(), "dataset": json.loads((NPZ.parent / "dataset_meta.json").read_text())},
+                    "seeds": args.seeds, "git": git_commit(),
+                    "dataset": json.loads((NPZ.parent / "dataset_meta.json").read_text())},
                    args.out)
         summary = {"seeds": args.seeds, "epochs": args.epochs, "seed_val_auc": seed_val, "seed_test_auc": seed_test,
                    "auc_mean": float(np.mean(seed_test)), "auc_std": float(np.std(seed_test)), "best_seed": bseed}
     else:
-        summary = json.loads(SUMMARY.read_text())
-    ck = torch.load(args.out, weights_only=False, map_location=device)
-    model = DetectorNet().to(device)
-    model.load_state_dict(ck["state"])
-    thr = ck["thr"]
+        summary = json.loads(summary_fp.read_text()) if summary_fp.exists() else {"auc_mean": float("nan"),
+                                                                                    "auc_std": float("nan")}
+    model, thr = load_ckpt(args.out, device)
 
     pt = predict(model, Xte, device)
     auc = roc_auc_score(yte, pt)
@@ -195,22 +221,67 @@ def main():
     for onset in (2.0, 12.0, 22.0):
         Xo, yo, _ = eval_sets(pos, noise, hard, sp, hs, p_index, "te", onset)
         inv[onset] = float(roc_auc_score(yo, predict(model, Xo, device)))
-    # operational: per-window false-positive rate on held-out LIVE noise and on test noise
-    fpr_live = float(np.mean(predict(model, Hte, device) >= thr)) if len(Hte) else float("nan")
+    # operational: per-window false-positive rate on held-out LIVE noise and on test noise, at the checkpoint's
+    # MCC threshold AND at the live trigger threshold (pipeline_config.json det_thresh -- what the daemon uses)
+    trig = Config.load().det_thresh
+    ph = predict(model, Hte, device) if len(Hte) else np.zeros(0)
+    fpr_live = float(np.mean(ph >= thr)) if len(Hte) else float("nan")
     fpr_noise = float(np.mean(pt[yte == 0] >= thr))
+    at_trig = {"trigger": trig, "fpr_test_noise": float(np.mean(pt[yte == 0] >= trig)),
+               "fpr_live_noise": float(np.mean(ph >= trig)) if len(Hte) else None,
+               "event_recall": float(np.mean(pt[yte == 1] >= trig))}
+    # 95% CIs (event-clustered bootstrap) and the paired deep-vs-baseline difference
+    cl = clusters(d, sp, "te")
+    mcc_at = lambda t: (lambda y, p: matthews_corrcoef(y, p >= t))  # noqa: E731
+    _, *auc_ci = stats.bootstrap_ci(roc_auc_score, yte, pt, cl)
+    _, *mcc_ci = stats.bootstrap_ci(mcc_at(thr), yte, pt, cl)
+    _, *sta_ci = stats.bootstrap_ci(roc_auc_score, yte, slt, cl)
+    d_base = stats.paired_bootstrap(roc_auc_score, yte, pt, slt, cl)[:3]
     print(f"\n=== DETECTION, chronological test (n={len(yte)}, {int(yte.sum())} event windows) ===")
     print(f"  deep detector : AUC {auc:.4f}  MCC {mcc:+.3f}   (seed mean AUC {summary['auc_mean']:.4f} "
           f"+/- {summary['auc_std']:.4f})")
-    print(f"  STA/LTA       : AUC {auc_s:.4f}  MCC {mcc_s:+.3f}")
+    print(f"                  95% CI AUC {auc_ci[0]:.4f}-{auc_ci[1]:.4f}  MCC {mcc_ci[0]:+.3f}-{mcc_ci[1]:+.3f}")
+    print(f"  STA/LTA       : AUC {auc_s:.4f}  MCC {mcc_s:+.3f}   (AUC CI {sta_ci[0]:.4f}-{sta_ci[1]:.4f})")
+    print(f"  deep - STA/LTA: dAUC {d_base[0]:+.4f}  95% CI {d_base[1]:+.4f}..{d_base[2]:+.4f}")
     print("  time-invariance (AUC with P at 2/12/22 s): " + ", ".join(f"{v:.4f}" for v in inv.values()))
     print(f"  per-window FPR at thr={thr:.3f}: test noise {fpr_noise:.4f}   held-out LIVE noise "
           f"(Oct 2-5, n={len(Hte)}) {fpr_live:.4f}")
+    print(f"  per-window FPR at the LIVE trigger {trig:g}: test noise {at_trig['fpr_test_noise']:.4f}   live noise "
+          f"{at_trig['fpr_live_noise']}   event-window recall {at_trig['event_recall']:.4f}")
     summary.update({"test_auc": auc, "test_mcc": mcc, "sta_lta_auc": auc_s, "sta_lta_mcc": mcc_s, "thr": thr,
                     "n_test": int(len(yte)), "n_test_events": int(yte.sum()), "auc_by_onset": inv,
-                    "fpr_test_noise": fpr_noise, "fpr_live_noise": fpr_live, "n_live_noise": int(len(Hte))})
-    SUMMARY.write_text(json.dumps(summary, indent=2))
-    make_figure(yte, pt, slt, auc, auc_s, summary)
-    print(f"  wrote {FIG.relative_to(ROOT)} and {SUMMARY.relative_to(ROOT)}")
+                    "fpr_test_noise": fpr_noise, "fpr_live_noise": fpr_live, "n_live_noise": int(len(Hte)),
+                    "fpr_test_noise_at_trigger": at_trig["fpr_test_noise"],
+                    "fpr_live_noise_at_trigger": at_trig["fpr_live_noise"], "recall_at_trigger": at_trig["event_recall"],
+                    "trigger": trig,
+                    "test_auc_ci": auc_ci, "test_mcc_ci": mcc_ci, "sta_lta_auc_ci": sta_ci, "d_auc_vs_sta_lta": d_base,
+                    "test_start": float(np.min(d["pos_time"][sp["te"][0]])),
+                    "dataset_version": ck_dataset_version(args.out, device)})
+    if args.compare:                                     # paired vs another checkpoint (the gate's input)
+        other, thr_o = load_ckpt(args.compare, device)
+        po = predict(other, Xte, device)
+        summary["vs"] = {"ckpt": str(args.compare),
+                         "d_auc": stats.paired_bootstrap(roc_auc_score, yte, pt, po, cl)[:3],
+                         # each model at its own validation threshold
+                         "d_mcc": stats.paired_bootstrap(matthews_corrcoef, yte, pt >= thr, po >= thr_o, cl)[:3],
+                         "fpr_live_noise_other": float(np.mean(predict(other, Hte, device) >= thr_o)) if len(Hte) else None,
+                         # both at the live trigger threshold: the false triggers the daemon would actually see
+                         "fpr_test_noise_at_trigger_other": float(np.mean(po[yte == 0] >= trig)),
+                         "fpr_live_noise_at_trigger_other": float(np.mean(predict(other, Hte, device) >= trig))
+                         if len(Hte) else None}
+        print(f"  vs {args.compare}: dAUC {summary['vs']['d_auc'][0]:+.5f} "
+              f"(CI {summary['vs']['d_auc'][1]:+.5f}..{summary['vs']['d_auc'][2]:+.5f})  dMCC {summary['vs']['d_mcc'][0]:+.3f}")
+    summary["mlflow_run_id"] = tracking.active_run_id()
+    summary_fp.write_text(json.dumps(summary, indent=2))
+    tracking.log_metrics(summary)
+    tracking.log_files([args.out, summary_fp])
+    if summary_fp == SUMMARY:
+        make_figure(yte, pt, slt, auc, auc_s, summary)
+    print(f"  wrote {summary_fp}")
+
+
+def ck_dataset_version(path, device):
+    return torch.load(path, weights_only=False, map_location=device).get("dataset", {}).get("version", "v2-2026-09-01")
 
 
 def make_figure(yte, pt, slt, auc_deep, auc_sta, summary):

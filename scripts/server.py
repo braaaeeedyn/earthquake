@@ -258,6 +258,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"error": str(e)})
         elif path == "/api/stations":
             return self._send(200, {"stations": STATIONS})
+        elif path == "/api/health":
+            # QuakeOps: live model versions + metrics/CIs + promotion history (tracking.py pull -> models.json),
+            # per-station drift (drift_check.py -> drift_status.json), and what the daemon actually loaded
+            out = {}
+            for key, name in (("models", "models.json"), ("drift", "drift_status.json"), ("live", "live_status.json")):
+                try:
+                    out[key] = json.loads((ROOT / "data" / "processed" / name).read_text())
+                except (OSError, ValueError):
+                    out[key] = None
+            out["loaded"] = (out.pop("live") or {}).get("models")
+            return self._send(200, out)
         elif path == "/api/version":
             return self._send(200, {"latest": APP_LATEST_VERSION, "min": APP_MIN_VERSION})
         elif path == "/api/geocode":
@@ -319,7 +330,10 @@ class Handler(BaseHTTPRequestHandler):
         unknown = [s for s in stations if s not in STATION_CODES]
         if unknown:
             return self._send(400, {"error": f"unknown station(s): {', '.join(unknown)}"})
-        toks = push_fcm.save_token(token.strip(), stations, str(sub.get("name", "")).strip())
+        mode = sub.get("mode", "standard")              # alert speed; older app versions don't send it
+        if mode not in ("standard", "fast"):
+            return self._send(400, {"error": "mode must be 'standard' or 'fast'"})
+        toks = push_fcm.save_token(token.strip(), stations, str(sub.get("name", "")).strip(), mode)
         self._send(200, {"ok": True, "count": len(toks)})
 
     def _unregister_push(self, sub):

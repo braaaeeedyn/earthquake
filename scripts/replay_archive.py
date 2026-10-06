@@ -23,6 +23,11 @@ Periods (never used to fit anything they evaluate):
   python scripts/replay_archive.py run       --start 2026-10-02,2026-08-18 --end 2026-10-05,2026-08-25
   python scripts/replay_archive.py compare-live --start 2026-10-02 --end 2026-10-05   # old VM log, same scorer
   python scripts/replay_archive.py events                                             # test-period events
+
+Any checkpoint can be replayed (the QuakeOps promotion gate does this for a challenger):
+  --det PATH   detector for `scan`; its windows are cached under replay/<sha12>/ so champion and
+               challenger caches never mix (the default detector keeps replay/ itself)
+  --mag PATH   magnitude ensemble for `run` / `events`;  --early PATH  quick-check fit for `run`
 """
 import argparse
 import json
@@ -36,6 +41,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
+import tracking  # noqa: E402
 from eq import locate, network, seismic  # noqa: E402
 from eq.pipeline import (NPTS, SR, ZNE_POST_S, ZNE_PRE_S, Config, MagnitudeEnsemble, Pipeline,  # noqa: E402
                          clean_window, detect_probs)
@@ -43,6 +49,7 @@ from eq.quakecast import load_catalog  # noqa: E402
 
 CACHE = seismic.RAW / "replay"
 OUT = ROOT / "data" / "processed" / "v2" / "replay"
+MAG = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
 STEP = 2.0
 PICK_MIN_P = 0.2                     # cache picks for every window at/above this (any det_thresh >= it)
 CAT_END = "2026-10-05"
@@ -119,7 +126,7 @@ def cmd_scan(args):
     from live_watch import load_detector
     device = "cuda" if torch.cuda.is_available() else "cpu"
     from concurrent.futures import ThreadPoolExecutor
-    det = load_detector(device)
+    det = load_detector(device, args.det) if args.det else load_detector(device)
     hours = [h for s, e in ranges(args) for h in pd.date_range(s, e, freq="h", inclusive="left")
              if not (CACHE / f"{h:%Y%m%dT%H}.npz").exists()]
     with ThreadPoolExecutor(6) as ex:                            # downloads overlap GPU scoring
@@ -152,13 +159,14 @@ class ArchiveSource:
     def z(self, c, t1, t2):
         return None
 
-    def zne(self, c, t1, t2):
-        key = (c, round(t1, 1))
+    def zne(self, c, t1, t2, sens=False):
+        key = (c, round(t1, 1), round(t2, 1), sens)
         if key not in self.cache:
-            a, b = seismic.UTCDateTime(t1) - ZNE_PRE_S, seismic.UTCDateTime(t2) + ZNE_POST_S
+            a, b = seismic.UTCDateTime(t1) - ZNE_PRE_S, seismic.UTCDateTime(t2) + (0.0 if sens else ZNE_POST_S)
             try:
                 st = seismic.get_waveforms(self.client, [c], a, b, channel="HH?")
-                x = seismic.to_zne(seismic.station_traces(st, c), self.inv, a, int(round((b - a) * SR))) \
+                x = seismic.to_zne(seismic.station_traces(st, c), self.inv, a, int(round((b - a) * SR)),
+                                   output="SENS" if sens else "VEL") \
                     if len(st) else None
                 i1 = int(round(ZNE_PRE_S * SR))
                 self.cache[key] = None if x is None else x[:, i1:i1 + int(round((t2 - t1) * SR))]
@@ -167,11 +175,11 @@ class ArchiveSource:
         return self.cache[key]
 
 
-def run_period(start, end, cfg, mag, inv):
+def run_period(start, end, cfg, mag, inv, early="auto"):
     src = ArchiveSource(inv)
     events = []
     pipe = Pipeline(None, mag, network.COORDS, network.CODES, src, cfg, on_event=events.append,
-                    early=None if mag is None else "auto")
+                    early=None if mag is None else early)
     for h in pd.date_range(start, end, freq="h", inclusive="left"):
         fp = CACHE / f"{h:%Y%m%dT%H}.npz"
         if not fp.exists():
@@ -199,11 +207,15 @@ def run_period(start, end, cfg, mag, inv):
 def ev_record(ev, pipe):
     return {"epoch": ev.declared_at, "origin": ev.t0, "confirmed": ev.confirmed, "lat": ev.lat, "lon": ev.lon,
             "rms": ev.rms, "n_stations": len(ev.stations), "stations": [network.CODES[i] for i in ev.stations],
+            "picks": ev.picks,
             "mag": ev.mag, "mag_spread": ev.mag_spread, "silent_near": ev.silent_near,
             "push_eligible": pipe.push_eligible(ev) if pipe is not None else None,
             "early_mag": ev.early_mag,
             "early_push": pipe.early_push_eligible(ev) if pipe is not None else None,
             "early_after_origin_s": None if ev.early_at is None else ev.early_at - ev.t0,
+            "early_fast_mag": ev.early.get("fast", {}).get("mag"),
+            "early_fast_push": pipe.early_push_eligible(ev, "fast") if pipe is not None else None,
+            "early_fast_after_origin_s": ev.early["fast"]["at"] - ev.t0 if "fast" in ev.early else None,
             "sized_after_origin_s": None if ev.sized_at is None else ev.sized_at - ev.t0}
 
 
@@ -276,11 +288,12 @@ def cmd_run(args):
         k, v = kv.split("=")
         setattr(cfg, k, type(getattr(cfg, k))(v))
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mag = MagnitudeEnsemble(ROOT / "data" / "processed" / "magnitude_ensemble.pt", network.CODES, network.COORDS, device)
+    mag = MagnitudeEnsemble(args.mag or MAG, network.CODES, network.COORDS, device)
+    early = json.loads(Path(args.early).read_text()) if args.early else "auto"
     inv = seismic.load_inventory()
     recs = []
     for s, e in ranges(args):
-        events, pipe = run_period(s, e, cfg, mag, inv)
+        events, pipe = run_period(s, e, cfg, mag, inv, early)
         recs += [ev_record(ev, pipe) for ev in events]
     OUT.mkdir(parents=True, exist_ok=True)
     tag = args.tag or f"{args.start}_{args.end}"
@@ -343,7 +356,7 @@ def cmd_events(args):
     windows cut at [P-5, P+25], distances from the LOCATED epicentre."""
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mag = MagnitudeEnsemble(ROOT / "data" / "processed" / "magnitude_ensemble.pt", network.CODES, network.COORDS, device)
+    mag = MagnitudeEnsemble(args.mag or MAG, network.CODES, network.COORDS, device)
     loc = locate.Locator(network.COORDS)
     d = np.load(ROOT / "data" / "processed" / "v2" / "magnitude.npz")
     t = d["ev_time"]
@@ -406,22 +419,107 @@ def cmd_events(args):
         if sel.any():
             s[f"bias_M{lo}-{hi}"] = round(float(err[sel].mean()), 2)
     OUT.mkdir(parents=True, exist_ok=True)
-    df.to_csv(OUT / "events_test.csv", index=False)
-    (OUT / "score_events_test.json").write_text(json.dumps(s, indent=1))
+    tag = f"_{args.tag}" if args.tag else ""
+    df.to_csv(OUT / f"events_test{tag}.csv", index=False)
+    (OUT / f"score_events_test{tag}.json").write_text(json.dumps(s, indent=1))
     print(json.dumps(s, indent=1))
+
+
+def cmd_early_variants(args):
+    """How fast can the FIRST (provisional) message be? Replays the cached days detection-only (same
+    confirmed events as `run`, plus their pick + confirmation times), joins each event to its final
+    magnitude from the existing two-stage replay (events_{val,test}_2stage.jsonl), then recomputes the
+    quick check per variant from one raw 3-C download per event:
+      base      4 s of P, response removed on [P-30, P+4+6] (what runs live: waits the 6 s taper margin)
+      nomargin  4 s of P, sensitivity-scaled on [P-30, P+4] (no response removal -> no taper -> no wait)
+      t2        2 s of P, response removed (6 s margin), its own fit (early_mag_T2.json)
+      t2_nomargin  2 s, sensitivity-scaled, no margin
+      locate    push at confirmation (3 picks located), no size at all
+    A variant pushes at max(confirmation, 3rd pick + T + margin) if confirmed and quick M >= its threshold."""
+    cat = catalog()
+    inv = seismic.load_inventory()
+    client = seismic.get_client()
+    e4 = json.loads((ROOT / "data" / "processed" / "v2" / "early_mag.json").read_text())
+    e2 = json.loads((ROOT / "data" / "processed" / "v2" / "early_mag_T2.json").read_text())
+    variants = {"base": (e4, 6.0, "VEL"), "nomargin": (e4, 0.0, "SENS"), "t2": (e2, 6.0, "VEL"),
+                "t2_nomargin": (e2, 0.0, "SENS")}
+    sets = {"val": (["2026-09-29", "2020-09-07"], ["2026-10-02", "2020-09-14"]),
+            "test": (["2026-10-02", "2026-08-18"], ["2026-10-05", "2026-08-25"])}
+    report = {}
+    for name, (starts, ends) in sets.items():
+        final = [json.loads(x) for x in (OUT / f"events_{name}_2stage.jsonl").read_text().splitlines() if x.strip()]
+        final = [r for r in final if r["confirmed"]]
+        evs = [ev for s, e in zip(starts, ends) for ev in run_period(s, e, Config.load(), None, None)[0] if ev.confirmed]
+        rows = []
+        for ev in evs:
+            f = next((r for r in final if abs(r["origin"] - ev.t0) < 0.5
+                      and locate.haversine_km(r["lat"], r["lon"], ev.lat, ev.lon) < 1.0), None)
+            picks = sorted((t, c) for c, t in ev.picks.items())
+            t1, t2 = seismic.UTCDateTime(picks[0][0] - ZNE_PRE_S), seismic.UTCDateTime(picks[-1][0] + 4 + ZNE_POST_S + 1)
+            try:
+                st = seismic.get_waveforms(client, [c for _, c in picks], t1, t2, channel="HH?")
+            except Exception:                                    # noqa: BLE001
+                st = []
+            d = locate.haversine_km(ev.lat, ev.lon, network.COORDS[:, 0], network.COORDS[:, 1])
+            m = match(cat, ev.t0, ev.lat, ev.lon)
+            row = {"origin": ev.t0, "confirm_s": ev.declared_at - ev.t0, "cat_mag": m["mag"] if m else None,
+                   "final_mag": f["mag"] if f else None, "final_push": bool(f and f["push_eligible"])}
+            for vname, (e, margin, mode) in variants.items():
+                T = e["T_s"]
+                t_star = max(ev.declared_at, picks[2][0] + T + margin)
+                est = []
+                for tp, c in picks:
+                    if tp + T + margin > t_star or not len(st):
+                        continue
+                    a = seismic.UTCDateTime(tp - ZNE_PRE_S)
+                    n = int(round((ZNE_PRE_S + T + margin) * SR))
+                    x = seismic.to_zne(seismic.station_traces(st, c).slice(a, a + n / SR), inv, a, n, output=mode)
+                    if x is None or not np.isfinite(x).all():
+                        continue
+                    i1 = int(round(ZNE_PRE_S * SR))
+                    peak = float(np.abs(x[:, i1:i1 + int(T * SR)]).max()) + 1e-12
+                    est.append(e["a"] * np.log10(peak) + e["b"] * np.log10(max(float(d[network.INDEX[c]]), 1.0)) + e["c"])
+                q = float(np.median(est)) if est else None
+                row[vname] = {"t": t_star - ev.t0, "mag": q, "push": q is not None and q >= e["early_min_mag"]}
+            row["locate"] = {"t": ev.declared_at - ev.t0, "mag": None, "push": True}
+            rows.append(row)
+        report[name] = {"days": 10, "confirmed": len(rows), "final_pushes": sum(r["final_push"] for r in rows), "variants": {}}
+        for vname in list(variants) + ["locate"]:
+            p = [r for r in rows if r[vname]["push"]]
+            real = [r for r in p if r["cat_mag"] is not None and r["cat_mag"] >= 2.5]
+            err = [r[vname]["mag"] - r["cat_mag"] for r in p if r[vname]["mag"] is not None and r["cat_mag"] is not None]
+            report[name]["variants"][vname] = {
+                "first_msgs": len(p), "real_M2.5+": len(real),
+                "real_any_quake": sum(r["cat_mag"] is not None for r in p),
+                "no_quake_false": sum(r["cat_mag"] is None for r in p),
+                "retracted": sum(not r["final_push"] for r in p),
+                "final_push_without_first": sum(1 for r in rows if r["final_push"] and not r[vname]["push"]),
+                "first_s_median": round(float(np.median([r[vname]["t"] for r in p])), 1) if p else None,
+                "first_s_range": [round(min(r[vname]["t"] for r in p), 1), round(max(r[vname]["t"] for r in p), 1)] if p else None,
+                "quick_mag_bias_vs_catalog": round(float(np.mean(err)), 2) if err else None,
+                "quick_mag_mae_vs_catalog": round(float(np.mean(np.abs(err))), 2) if err else None}
+        print(name, json.dumps(report[name], indent=1), flush=True)
+    (OUT / "early_variants.json").write_text(json.dumps(report, indent=1))
+    print(f"wrote {OUT / 'early_variants.json'}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["scan", "run", "events", "calibrate", "compare-live"])
+    ap.add_argument("cmd", choices=["scan", "run", "events", "calibrate", "compare-live", "early-variants"])
     ap.add_argument("--max-false-week", type=float, default=1.0, dest="max_false_week")
     ap.add_argument("--start", default="2026-09-25")
     ap.add_argument("--end", default="2026-10-05")
     ap.add_argument("--set", nargs="*", help="override Config fields, e.g. det_thresh=0.7 max_rms=1.2")
     ap.add_argument("--tag")
+    ap.add_argument("--det", help="detector checkpoint for scan (cached separately by its sha256)")
+    ap.add_argument("--mag", help="magnitude checkpoint for run / events")
+    ap.add_argument("--early", help="quick-check fit (early_mag.json) for run")
     args = ap.parse_args()
+    if args.det:
+        global CACHE
+        CACHE = CACHE / tracking.sha256(args.det)[:12]
     {"scan": cmd_scan, "run": cmd_run, "events": cmd_events, "calibrate": cmd_calibrate,
-     "compare-live": cmd_compare_live}[args.cmd](args)
+     "compare-live": cmd_compare_live, "early-variants": cmd_early_variants}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,21 @@
+[Unit]
+# QuakeOps: MLflow tracking server + model registry. Localhost only; the public face is the Caddy site
+# mlflow.seismicsocal.duckdns.org (basic auth). Its own venv keeps MLflow's pins away from the daemon's.
+Description=MLflow tracking server + model registry (QuakeOps)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/mlflow
+Environment=MLFLOW_DISABLE_AGENT_HINT=1
+ExecStart=/opt/mlflow/.venv/bin/mlflow server --host 127.0.0.1 --port 5000 --workers 1 \
+    --backend-store-uri sqlite:////opt/mlflow/mlflow.db \
+    --artifacts-destination /opt/mlflow/artifacts --serve-artifacts \
+    --allowed-hosts mlflow.seismicsocal.duckdns.org,127.0.0.1:5000,localhost:5000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

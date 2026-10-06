@@ -1,0 +1,17 @@
+[Unit]
+# QuakeOps daily VM job (after the crosscheck): (1) resolve the registry @champion and write models.json --
+# installed only if QUAKEOPS_AUTO_DEPLOY=1 in .env (else it reports and you run `tracking.py pull --apply`);
+# the daemon restarts itself on a new deployed version. (2) Evidently drift check of yesterday's live
+# features vs the training reference -> drift_status.json (+ email on a 2-day drifting streak).
+Description=SeismicSoCal QuakeOps daily job (champion pull + drift check)
+After=network-online.target mlflow.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/seismicsocal
+EnvironmentFile=-/opt/seismicsocal/.env
+Environment=MLFLOW_DISABLE_AGENT_HINT=1
+ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/tracking.py pull
+ExecStart=/opt/seismicsocal/.venv/bin/python -u scripts/drift_check.py

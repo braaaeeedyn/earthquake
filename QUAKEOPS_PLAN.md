@@ -7,11 +7,14 @@
 > statistically better**, and the live stream is watched for drift.
 > **Effort:** ~4–5 weeks part-time (models, data and deployment already exist). **Cost target:** $0.
 
-Do this **after TransitPulse**. It **reuses** Dagster, GitHub Actions and the statistics methods from there and
-introduces only three new things: **MLflow, Evidently and gated model promotion.**
+Originally planned for after TransitPulse, reusing its Dagster. TransitPulse doesn't exist yet, so QuakeOps sets up
+Dagster itself, on the PC (decision 2026-10-05). **How it is built on the current v2 system: `QUAKEOPS_IMPLEMENTATION.md`.**
 See [the overlap plan](#overlap-plan-with-transitpulse).
 
 ---
+
+> **Status 2026-10-05:** `[x]` = built and tested on the PC (not yet deployed); `[ ]` = a VM step for you
+> (DEPLOY.md "QuakeOps"). Summary and "when will I see it": top of `QUAKEOPS_IMPLEMENTATION.md`.
 
 ## 1. What it does
 
@@ -27,8 +30,8 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 ### What runs behind the scenes (new)
 1. **MLflow** records every training run: parameters, metrics, seeds, dataset version, model artifact.
 2. Models live in the **MLflow Model Registry** with aliases **`champion`** (live) and **`challenger`** (candidate).
-3. A monthly **Dagster** job (reused from TransitPulse) fetches new SCEDC events, rebuilds the dataset, trains a challenger, evaluates it and runs the **promotion gate**.
-4. If the gate passes, the challenger becomes `champion`, and the live daemon reloads it on its next restart.
+3. A monthly **Dagster** job (on the PC) fetches new SCEDC events, rebuilds the dataset, trains a challenger, evaluates it, **replays held-out days** with it and runs the **promotion gate**.
+4. If the gate passes, the challenger becomes `champion`; the VM pulls it daily (applied automatically only when `QUAKEOPS_AUTO_DEPLOY=1`).
 5. A daily **Evidently** job compares the live stream with the training data and updates the drift status.
 6. **GitHub Actions** (reused) tests every change and deploys code to the VM.
 
@@ -41,7 +44,7 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 | 4 | Larger datasets | Existing ~11 GB SCEDC waveform cache + monthly growth | existing |
 | 5 | Monitoring (**model drift part**) | Evidently drift reports on live features and detection scores | **new** |
 | 7 | Formal statistics | Bootstrap CIs on AUC / R², a paired comparison inside the promotion gate, the seed-averaged CI write-up | reused |
-| 11 | Orchestration | Dagster retraining and drift jobs | reused |
+| 11 | Orchestration | Dagster retraining (PC) + systemd timer for the daily drift/pull job | **new** (TransitPulse not built yet) |
 | 12 | Experiment tracking + registry | MLflow tracking server + Model Registry with aliases | **new** |
 | 13 | CI/CD | GitHub Actions tests, SSH deploy, plus **model-promotion gates** | reused + new concept |
 | 18 | Reproducible | Every model traceable to code commit + data version + seed | existing, extended |
@@ -62,7 +65,7 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 | Existing | PyTorch, ObsPy, NumPy, scikit-learn, React + Vite, Capacitor, FCM, Caddy, systemd, Oracle A1 VM | unchanged |
 | Experiment tracking | **MLflow OSS** tracking server | Runs on the **Oracle VM** (always free) with a **SQLite** backend store and **local-disk** artifact store, behind **Caddy** with HTTP basic auth at e.g. `mlflow.seismicsocal.duckdns.org`. **Not** Databricks / managed MLflow. |
 | Model registry | **MLflow Model Registry** with **aliases** (`champion`, `challenger`) | Aliases are the current way to do this; avoid the old "stages" API. |
-| Orchestration | **Dagster OSS** | **Reused** from TransitPulse, same VM, separate code location. |
+| Orchestration | **Dagster OSS** | Runs on the **PC** (where the GPU is); assets shell out to `retrain.py` stages. The daily VM job is a systemd timer. |
 | Training compute | **Your local RTX 4060** | Free. Training runs locally and logs to the remote MLflow server. **No cloud GPUs.** |
 | Drift monitoring | **Evidently** (open-source library) | Generates HTML/JSON reports; the JSON summary feeds the health page. **Not** Evidently Cloud. |
 | Statistics | **numpy** bootstrap; `scikit-learn` metrics | Reused methods from TransitPulse. |
@@ -87,55 +90,55 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 ## 4. Build plan
 
 ### Phase 0: prep (week 0)
-- [ ] Freeze the current test split as **`test_v1`**: save its event IDs to a versioned file. Every future model is compared on this same set, so the comparison is fair.
-- [ ] Record the current models' metrics (detection AUC 0.992 / MCC 0.930, magnitude R² 0.840, EEW alert MCC 0.760) as the **v1 champions**.
+- [x] ~~Freeze a `test_v1`~~ → **rolling chronological split** (locked rule unchanged): champion and challenger are compared, paired, on the challenger's test set, which neither has seen.
+- [x] Record the current v2 models' metrics (detection AUC 0.9998 / MCC 0.886, magnitude R² 0.951 / MAE 0.098), with bootstrap CIs, as the **v1 champions**.
 
 ### Phase 1: MLflow (week 1) · gap #12
-- [ ] Install the MLflow server on the VM:
+- [ ] **(VM step, yours)** Install the MLflow server on the VM:
   - systemd unit `mlflow.service`
   - `--backend-store-uri sqlite:////opt/mlflow/mlflow.db --artifacts-destination /opt/mlflow/artifacts`
   - Caddy reverse proxy with `basic_auth`
-- [ ] Add `mlflow.start_run()` logging to `seismic_train.py`, `seismic_train_multi.py`, `seismic_eew*.py` and the `demo_*.py` scripts:
+- [x] Add MLflow run logging (via `scripts/tracking.py`) to `demo_detect.py` and `demo_magnitude.py` (the only scripts that produce live checkpoints):
   - **params:** architecture, learning rate, epochs, seed, dataset hash, git commit
   - **metrics:** AUC, MCC, R², MAE, each against its baseline
   - **artifacts:** `.pt` files, figures, `seismic.json`
-- [ ] Register the existing checkpoints as version 1 of `detector`, `magnitude_ensemble` and `eew_ensemble`; set alias `champion`.
-- [ ] Change `live_watch.py` to load the **`champion`** model from the registry, falling back to the local `.pt` if MLflow is down. Keep the `SCALE` constant tied to the dataset version.
+- [ ] **(VM step, yours)** Register the existing checkpoints as version 1 of `detector` and `magnitude`; set alias `champion`. (EEW is gone; `SCALE` is gone: checkpoints carry their normalizers.)
+- [x] A daily `tracking.py pull` on the VM downloads `@champion` (sha256-verified) and writes `models.json`; the daemon restarts itself when the version changes.
 - ✅ **Checkpoint:** every model on the live site is traceable to its run.
 
 ### Phase 2: statistics write-up (week 2) · gap #7
-- [ ] Bootstrap 95% CIs for detection AUC/MCC and magnitude R²/MAE on `test_v1`.
-- [ ] Finish the **seed-averaged magnitude R² ± CI** (open TODO in the earthquake repo's `CLAUDE.md`).
-- [ ] Add CIs to `app/public/seismic.json` so the site shows them.
+- [x] Bootstrap 95% CIs (event-clustered for detection) for detection AUC/MCC and magnitude R²/MAE on the test split.
+- [x] Finish the **seed-averaged magnitude R² ± CI** (open TODO in the earthquake repo's `CLAUDE.md`).
+- [x] Add CIs to `app/public/seismic.json` so the site shows them.
 
 ### Phase 3: retraining + promotion gate (week 3) · gaps #11 #13
-- [ ] Dagster job `retrain_monthly`, running on your PC or triggered from the VM, with these steps:
-  1. **fetch** new events/waveforms (existing `seismic_build*.py`, date range = last month)
-  2. **rebuild** the dataset and record its hash
-  3. **train** a 5-seed challenger and log it to MLflow
-  4. **evaluate** on `test_v1` plus the newest held-out month
+- [x] Dagster job `retrain_monthly`, running on your PC or triggered from the VM, with these steps:
+  1. **data:** `build_dataset.py --append` (new month only; earlier selections kept) and record the dataset version
+  2. **train** a 5-seed challenger and log it to MLflow
+  3. **evaluate** paired against the champion on the challenger's test split (includes the newest data)
+  4. **replay** the 10 held-out days with the challenger (the acceptance test)
   5. **gate**
   6. **promote or reject**
-- [ ] **Promotion gate rules** (write them in the repo as `PROMOTION_RULES.md`):
-  - beats each classical baseline (STA/LTA, amplitude+distance) on `test_v1`
-  - no worse than the champion beyond a small tolerance (e.g. AUC −0.002); the 95% bootstrap CI of (challenger − champion) must not be entirely below 0
-  - no regression on the newest month
-  - passes all pytest checks
-- [ ] On pass: set alias `champion` to the new version, write a `promotions.jsonl` record with metrics and the reason, and send an email.
+- [x] **Promotion gate rules** (G1–G6, in `HOW_IT_WORKS.md` §12 and `retrain.py`):
+  - beats each classical baseline (STA/LTA, amplitude+distance), paired CI above 0
+  - non-inferior to the champion on the same test set (paired bootstrap CI)
+  - passes the replay acceptance test (precision vs chance, 0 false pushes, magnitudes vs catalogue)
+  - passes pytest + selftest, clean lineage, and has a reason to switch (newer data or a significant gain)
+- [x] On pass: set alias `champion` to the new version, write a `promotions.jsonl` record with metrics and the reason, and send an email.
 
 ### Phase 4: drift monitoring (week 4) · gap #5
-- [ ] Small change to `live_watch.py`: append per-window features (station, max amplitude, RMS, detector probability, timestamp) to a rolling **daily Parquet** file.
-- [ ] Save a **reference profile** of the same features from the training set.
-- [ ] Daily Dagster job: Evidently `DataDriftPreset` per station (current day vs. reference). Write an HTML report and a `drift_status.json` (OK / watch / drifting).
-- [ ] Email alert on "drifting" for ≥ 2 consecutive days.
+- [x] Small change to `live_watch.py`: append scale-free per-window features (detector probability, crest factor, high-frequency power ratio, all on `det_prep` input) to a daily CSV. Raw amplitude isn't comparable to training (live = counts, training = normalized).
+- [x] Save a **reference profile** of the same features from the training set.
+- [x] Daily VM systemd timer: Evidently `DataDriftPreset` per station (current day vs. reference). Write an HTML report and a `drift_status.json` (OK / watch / drifting).
+- [x] Email alert on "drifting" for ≥ 2 consecutive days.
 
 ### Phase 5: CI/CD + health page (week 5) · gap #13
-- [ ] **GitHub Actions**:
+- [x] **GitHub Actions**:
   - On PR: ruff, pytest (CPU, small fixtures), `npm run build` for the app
-  - On merge to `main`: **SSH deploy** to the VM (pull, build the app, `systemctl restart seismicsocal`)
+  - On merge to `main`: **SSH deploy** to the VM (stream `git archive` + `app/dist`, `systemctl restart seismicsocal`)
   - Models are **not** in git; the VM pulls the `champion` from MLflow
-- [ ] React **`/health` page**: champion versions, metrics with CIs, baseline comparison, drift badges, promotion history (reads `drift_status.json` and a small `/api/models` endpoint added to `server.py`).
-- [ ] README section: "How a model gets to production".
+- [x] React **`/health` page**: champion versions, metrics with CIs, baseline comparison, drift badges, promotion history (reads one `/api/health` endpoint added to `server.py`).
+- [x] README section: "How a model gets to production".
 
 ---
 
@@ -147,14 +150,14 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 Example résumé bullet (fill in your real numbers):
 > Productionized SeismicSoCal's earthquake models with MLflow tracking and a model registry, monthly Dagster
 > retraining with a statistically gated champion/challenger promotion (bootstrap CIs on a frozen test set), and
-> Evidently drift monitoring over 10 live SeedLink stations; CI/CD via GitHub Actions.
+> Evidently drift monitoring over 19 live SeedLink stations; CI/CD via GitHub Actions.
 
 ---
 
 ## 6. Overlap plan with TransitPulse
 | Skill / tool | Learned in TransitPulse | Used here |
 |---|:-:|:-:|
-| Dagster OSS (Oracle VM) | ✅ | ✅ reused |
+| Dagster OSS | ✅ (planned) | ✅ set up here first, on the PC |
 | GitHub Actions | ✅ | ✅ reused (+ SSH deploy, promotion gates) |
 | Bootstrap CIs / paired tests | ✅ | ✅ reused |
 | MLflow + Model Registry | ❌ | ✅ **new** |

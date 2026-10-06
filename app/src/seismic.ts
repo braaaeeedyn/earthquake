@@ -10,6 +10,10 @@ export interface Task {
   baseline_name: string
   winner: Winner
   desc: string
+  // 95% bootstrap CIs + test-set size, written by scripts/make_figures.py publish (optional)
+  deep_ci?: [number, number]
+  baseline_ci?: [number, number]
+  n?: number
 }
 
 export interface Seismic {

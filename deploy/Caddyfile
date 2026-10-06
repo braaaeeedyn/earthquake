@@ -23,3 +23,12 @@ seismicsocal.duckdns.org {
 		file_server
 	}
 }
+
+# QuakeOps: the MLflow UI/API for the PC's training runs. Password hash from `caddy hash-password`.
+# (DuckDNS resolves sub-subdomains to the same IP; check with `nslookup mlflow.seismicsocal.duckdns.org`.)
+mlflow.seismicsocal.duckdns.org {
+	basic_auth {
+		quakeops REPLACE_WITH_CADDY_HASH
+	}
+	reverse_proxy 127.0.0.1:5000
+}

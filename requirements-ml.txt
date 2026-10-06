@@ -3,3 +3,8 @@
 torch>=2.2
 scikit-learn>=1.4
 matplotlib>=3.8
+# QuakeOps (PC): tracking/registry, drift, orchestration. VM daemon venv needs only mlflow-skinny + evidently.
+mlflow>=3.16
+evidently==0.7.23
+dagster>=1.13
+dagster-webserver>=1.13

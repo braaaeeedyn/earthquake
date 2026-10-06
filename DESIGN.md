@@ -245,6 +245,15 @@ components:
     padding: 24px 32px
 ---
 
+## Project overrides (SeismicSoCal, 2026-10-05)
+
+- **Headings use Literata** (self-hosted via `@fontsource-variable/literata`, weight 600, tracking -0.015em) instead of
+  SF Pro Rounded: the editorial, explanatory voice chosen in PRODUCT.md. Body stays system sans; numbers stay mono.
+- **Fluid layout and type:** content column `clamp(720px, 62vw, 1040px)`, gutters `clamp(16px, 4vw, 32px)`, headings
+  and ledes scale with `clamp()` tokens (`--fs-h1` 36→68px, `--fs-h2` 26→38px, `--fs-h3` 24→34px), prose capped at 62ch.
+- **Text contrast:** paragraph text is `{colors.charcoal}` (#525252, 7.8:1); small labels use `{colors.body}` (#737373, 4.7:1).
+  `{colors.mute}` (#a3a3a3, 2.5:1) is no longer used for readable text.
+
 ## Overview
 
 Ollama's site is the most aggressively under-designed marketing surface in the AI tooling space, and that is the entire point. The home page reads like a Markdown README rendered with care: a 36px center-aligned heading sits above an inline `curl` install snippet inside a soft-gray pill, a single black "Download" CTA, and a hand-drawn llama mascot as the only ornament. Everything else — automate-your-work block, "Start local. Scale cloud." pricing pair, "Your data stays yours" guarantee strip, FAQ wall on `/pricing` — sits on the same paper-white canvas (`{colors.canvas}`) with quiet `{colors.body}` neutrals carrying the prose. The system is the documentation, and the documentation is the system.

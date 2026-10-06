@@ -1,0 +1,72 @@
+# QuakeOps CI/CD (gap #13): lint + tests + site build on every PR and push; on main, deploy the code and
+# site to the VM with the same tar-stream deploy as DEPLOY.md. Models never travel through git -- the VM
+# installs the registry @champion (scripts/tracking.py pull). The deploy job is skipped until the
+# VM_HOST / VM_SSH_KEY secrets exist (DEPLOY.md, "QuakeOps").
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pandas scipy scikit-learn obspy pytest ruff
+      - run: ruff check scripts src tests
+      - run: pytest
+      - run: python scripts/live_watch.py --selftest
+
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: app/dist
+
+  deploy:
+    needs: [python, app]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.VM_SSH_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+      - uses: actions/download-artifact@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          name: dist
+          path: app/dist
+      - name: Stream code + site to the VM and restart
+        if: env.HAS_KEY == 'true'
+        env:
+          KEY: ${{ secrets.VM_SSH_KEY }}
+          HOST: ${{ secrets.VM_HOST }}
+        run: |
+          install -m 600 /dev/null ~/key && printf '%s\n' "$KEY" > ~/key
+          SSH="ssh -i ~/key -o StrictHostKeyChecking=accept-new ubuntu@$HOST"
+          # the APK under app/dist is gitignored and not rebuilt here: keep the VM's copy
+          git archive HEAD | $SSH 'tar x -C /opt/seismicsocal'
+          tar c --exclude='*.apk' -C app dist | $SSH 'tar x -C /opt/seismicsocal/app'
+          $SSH 'sudo systemctl restart seismicsocal && sleep 8 && curl -fsS 127.0.0.1:8000/api/status'

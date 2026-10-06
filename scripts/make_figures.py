@@ -8,7 +8,11 @@
 Inputs: data/processed/{detector,magnitude_ensemble}.pt, data/processed/v2/{detection,magnitude}.npz,
 data/processed/v2/replay/{events_test_2stage,events_val_2stage}.jsonl + score files, the local catalog.
 
-  python scripts/make_figures.py
+Also publishes the headline numbers + 95% CIs (from detection_demo.json / magnitude_demo.json) into
+app/public/seismic.json -- numeric fields only; the `desc` prose is never rewritten.
+
+  python scripts/make_figures.py             # figures + publish
+  python scripts/make_figures.py publish     # numbers only (QuakeOps promotion)
 """
 import json
 import sys
@@ -191,6 +195,28 @@ def size_figure():
     print("wrote size_evidence.png")
 
 
+def publish():
+    """Copy the champion's test metrics and CIs into the site's seismic.json (numbers only)."""
+    from datetime import date
+    fp = OUT / "seismic.json"
+    site = json.loads(fp.read_text(encoding="utf-8"))
+    proc = ROOT / "data" / "processed"
+    src = {"detection": (proc / "detection_demo.json", "test_auc", "sta_lta_auc", "n_test"),
+           "magnitude": (proc / "magnitude_demo.json", "ens_r2", "baseline_r2", "n_test")}
+    for t in site["tasks"]:
+        f, deep, base, n = src[t["key"]]
+        m = json.loads(f.read_text())
+        t["deep"], t["baseline"], t["n"] = round(m[deep], 4), round(m[base], 3), m[n]
+        if f"{deep}_ci" in m:
+            t["deep_ci"] = [round(v, 4) for v in m[f"{deep}_ci"]]
+            t["baseline_ci"] = [round(v, 3) for v in m[f"{base}_ci"]]
+    site["generated_at"] = date.today().isoformat()
+    fp.write_text(json.dumps(site, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    print("published metrics + CIs to app/public/seismic.json -- check the numbers quoted in each `desc` by hand")
+
+
 if __name__ == "__main__":
-    detect_figure()
-    size_figure()
+    if sys.argv[1:] != ["publish"]:
+        detect_figure()
+        size_figure()
+    publish()

@@ -10,6 +10,11 @@ const SUBSCRIBED_KEY = 'seismic.push.subscribed'
 const TOKEN_KEY = 'seismic.push.token'
 const STATIONS_KEY = 'seismic.push.stations'
 const NAME_KEY = 'seismic.push.name'
+const MODE_KEY = 'seismic.push.mode'
+
+// Alert speed for the FIRST message: standard = most safeguards (~30-35 s after the quake starts);
+// fast = earlier (~25 s), rougher size, more retractions. The confirmed-size message is the same for both.
+export type AlertMode = 'standard' | 'fast'
 
 export function isNativeApp() {
   return Capacitor.isNativePlatform()
@@ -37,6 +42,14 @@ export function subscribedStations(): string[] {
 }
 
 // The name last used to subscribe, so the form can prefill it when re-opening or updating.
+export function subscribedMode(): AlertMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'fast' ? 'fast' : 'standard'
+  } catch {
+    return 'standard'
+  }
+}
+
 export function subscribedName(): string {
   try {
     return localStorage.getItem(NAME_KEY) ?? ''
@@ -63,7 +76,7 @@ function awaitToken(): Promise<string> {
 // Request permission, register for push, and send {token, stations} to the server.
 // `stations` is the list of sensor codes the user chose to subscribe to (near them).
 // Returns a status string, or null on web (where push isn't available).
-export async function enablePush(sub: { name: string; stations: string[] }): Promise<string | null> {
+export async function enablePush(sub: { name: string; stations: string[]; mode: AlertMode }): Promise<string | null> {
   if (!Capacitor.isNativePlatform()) return null
   if (!sub.stations.length) throw new Error('pick at least one station')
 
@@ -72,12 +85,13 @@ export async function enablePush(sub: { name: string; stations: string[] }): Pro
   if (perm.receive !== 'granted') throw new Error('notification permission denied')
 
   const token = await awaitToken()
-  await registerPushToken({ token, stations: sub.stations, name: sub.name })
+  await registerPushToken({ token, stations: sub.stations, name: sub.name, mode: sub.mode })
   try {
     localStorage.setItem(SUBSCRIBED_KEY, '1')
     localStorage.setItem(TOKEN_KEY, token)
     localStorage.setItem(STATIONS_KEY, JSON.stringify(sub.stations))
     localStorage.setItem(NAME_KEY, sub.name)
+    localStorage.setItem(MODE_KEY, sub.mode)
   } catch {
     // storage unavailable — state just won't persist across restarts
   }
@@ -100,6 +114,7 @@ export async function disablePush(): Promise<void> {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(STATIONS_KEY)
     localStorage.removeItem(NAME_KEY)
+    localStorage.removeItem(MODE_KEY)
   } catch {
     // ignore
   }

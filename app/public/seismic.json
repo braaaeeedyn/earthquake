@@ -18,7 +18,16 @@
       "baseline": 0.816,
       "baseline_name": "STA/LTA",
       "winner": "deep",
-      "desc": "Is an earthquake present in a 30-second window? Trained on the 19 stations that stream live, with the P onset anywhere in the window and the old system's own false alarms as hard negatives. Chronological held-out test of 7,303 windows (4,964 events): AUC 0.9998, MCC 0.886; STA/LTA on the same filtered input reaches 0.816."
+      "desc": "Is an earthquake present in a 30-second window? Trained on the 19 stations that stream live, with the P onset anywhere in the window and the old system's own false alarms as hard negatives. Chronological held-out test of 7,303 windows (4,964 events): AUC 0.9998, MCC 0.886; STA/LTA on the same filtered input reaches 0.816.",
+      "n": 7303,
+      "deep_ci": [
+        0.9997,
+        0.9999
+      ],
+      "baseline_ci": [
+        0.805,
+        0.828
+      ]
     },
     {
       "key": "magnitude",
@@ -28,7 +37,16 @@
       "baseline": 0.886,
       "baseline_name": "amp + distance",
       "winner": "deep",
-      "desc": "Network magnitude from multi-station 3-component traces aligned on picked P arrivals, with distances from the located epicentre. 5-seed ensemble R² 0.951 (MAE 0.10) on 937 held-out events (M2-5.2) vs 0.886 for amplitude + distance; in live-like conditions (10 km location error, 3-6 stations) R² 0.939."
+      "desc": "Network magnitude from multi-station 3-component traces aligned on picked P arrivals, with distances from the located epicentre. 5-seed ensemble R² 0.951 (MAE 0.10) on 937 held-out events (M2-5.2) vs 0.886 for amplitude + distance; in live-like conditions (10 km location error, 3-6 stations) R² 0.939.",
+      "n": 937,
+      "deep_ci": [
+        0.9426,
+        0.9587
+      ],
+      "baseline_ci": [
+        0.871,
+        0.898
+      ]
     }
   ],
   "stations": [

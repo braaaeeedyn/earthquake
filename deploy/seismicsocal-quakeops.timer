@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the SeismicSoCal QuakeOps job daily
+
+[Timer]
+# 09:30 UTC, after the 09:00 crosscheck. Persistent=true runs a missed job after downtime.
+OnCalendar=*-*-* 09:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -119,6 +119,39 @@ See `DEPLOY.md` for the Oracle A1 deployment (Caddy + systemd) and update proced
 
 ---
 
+## How a model gets to production (QuakeOps)
+
+```
+monthly (Dagster, PC)            gate (retrain.py)                          VM (daily timer)
+build_dataset --append  ──►  G1 beats baseline (paired CI)      ──►  @champion  ──►  tracking.py pull: sha256-
+train challenger (MLflow)    G2 non-inferior to champion             in MLflow        verified install (opt-in)
+ --compare champion          G3 replay of 10 held-out days                            → daemon restarts on it
+                             G4 tests  G5 lineage  G6 reason                          → drift_check.py daily
+```
+
+Every training run is tracked in MLflow: code commit, dataset version, seeds, metrics with 95% CIs, and
+the checkpoint. A challenger replaces the champion only if it beats the classic baseline, is
+statistically non-inferior to the champion on a test split neither model has seen, and passes the same
+replay acceptance test the live system was accepted on (precision against a chance baseline, no false
+pushes, magnitudes matching the catalogue). The live stream is checked every day for drift from the
+training data, and the result is shown on the site's `/health` page. Details: `HOW_IT_WORKS.md` §12.
+
+### Magnitude: seed-averaged result
+
+The magnitude model was trained with 10 seeds on the same chronological split (937 held-out quakes,
+M2–5.2). The two sources of uncertainty are reported separately:
+
+| | R² | 95% CI |
+|---|---|---|
+| Single model, mean over 10 seeds (seed variance) | 0.949 | 0.948–0.951 (t-interval) |
+| 10-seed ensemble (sampling variance) | 0.952 | 0.944–0.959 (event bootstrap) |
+| Live 5-seed ensemble | 0.951 | 0.943–0.959 |
+| Amplitude + distance baseline | 0.886 | 0.871–0.898 |
+| Ensemble − baseline (paired) | +0.067 | +0.056…+0.079 |
+
+The deep model's advantage over the baseline is about 6× the width of either uncertainty. Ensembling
+adds +0.003 over a single model, well inside the sampling CI, so the live system keeps 5 seeds.
+
 ## Honesty notes
 
 - **Coverage** is strongest where >= 3 stations sit within ~100 km (LA basin, Inland Empire, Mojave,
@@ -142,9 +175,11 @@ src/eq/
   locate.py        # P picker, travel times (+ fitted correction), grid-search locator
   seismic.py       # SCEDC waveform access (response removal, 18 Hz common low-pass, compact cache)
   quakecast.py     # USGS catalog (monthly chunks, auto-split, date-ranged cache)
+  stats.py         # bootstrap / cluster / paired bootstrap CIs, seed t-CI
 scripts/
   build_dataset.py      # v2 datasets on the live network (check / select / fetch / assemble)
-  demo_detect.py / demo_magnitude.py   # train + evaluate
+  demo_detect.py / demo_magnitude.py   # train + evaluate (95% CIs, --compare a champion)
+  tracking.py / retrain.py / quakeops_dagster.py / drift_check.py   # QuakeOps: MLflow, gate, Dagster, drift
   fit_early_magnitude.py / make_figures.py   # quick-check fit / site evidence figures
   replay_archive.py     # replay harness: scan / calibrate / run / events / compare-live
   live_watch.py         # LIVE SeedLink daemon (pushes only with PUSH_ENABLED=1)

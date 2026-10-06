@@ -21,8 +21,15 @@ Labels (see URGENT_PLAN.md section 2.2):
 
   python scripts/build_dataset.py                 # all stages
   python scripts/build_dataset.py --stage fetch --workers 6
+  python scripts/build_dataset.py --append --end 2026-11-01 --catalog-end 2026-11-03   # monthly growth (QuakeOps)
+
+--append extends the existing selections to a later --end WITHOUT re-drawing them: M3+ events are
+declustered per cell-month (earlier months never change), the M2-3 sample and the noise times are drawn
+for the new interval only, at the original rate. Fetch is cached per event, so only the new month downloads.
+dataset_meta.json carries `version` = sha256 of the selection lists + end date (lineage).
 """
 import argparse
+import hashlib
 import json
 import sys
 from concurrent.futures import as_completed
@@ -73,23 +80,37 @@ def station_dists(lat, lon):
                                network.COORDS[:, 0][None], network.COORDS[:, 1][None])
 
 
-def select(args, cat):
-    rng = np.random.default_rng(0)
+def _window(cat, start, end):
     t = cat["time"]
-    inwin = (t >= args.start) & (t < args.end)
     inreg = cat.lat.between(REGION[0], REGION[1]) & cat.lon.between(REGION[2], REGION[3])
+    return (t >= start) & (t < end) & inreg
 
-    m = cat[inwin & inreg & (cat.mag >= MAG_MIN)].copy()
+
+def _mag_events(cat, win):
+    """M3+ events with >= 3 stations <= 200 km, declustered (<= 25 per 0.2-deg cell per month)."""
+    m = cat[win & (cat.mag >= MAG_MIN)].copy()
     d = station_dists(m.lat.values, m.lon.values)
     m = m[(d <= MAG_R).sum(1) >= 3].copy()
     m["cell"] = (np.floor(m.lat / 0.2).astype(int).astype(str) + "_" + np.floor(m.lon / 0.2).astype(int).astype(str)
                  + "_" + m.time.dt.strftime("%Y%m"))
-    m = m.sort_values("mag", ascending=False).groupby("cell").head(25).sort_values("time")
-    m.drop(columns="cell").to_csv(RAW / "sel_mag.csv", index=False)
+    return m.sort_values("mag", ascending=False).groupby("cell").head(25).sort_values("time").drop(columns="cell")
 
-    x = cat[inwin & inreg & (cat.mag >= DETX_LO) & (cat.mag < MAG_MIN)]
-    dx = station_dists(x.lat.values, x.lon.values)
-    x = x[(dx <= DETX_R).any(1)]
+
+def _detx_candidates(cat, win):
+    """M2-3 events with a station <= 100 km."""
+    x = cat[win & (cat.mag >= DETX_LO) & (cat.mag < MAG_MIN)]
+    return x[(station_dists(x.lat.values, x.lon.values) <= DETX_R).any(1)]
+
+
+def select(args, cat):
+    if args.append:
+        return select_append(args, cat)
+    rng = np.random.default_rng(0)
+    win = _window(cat, args.start, args.end)
+    m = _mag_events(cat, win)
+    m.to_csv(RAW / "sel_mag.csv", index=False)
+
+    x = _detx_candidates(cat, win)
     x = x.iloc[np.sort(rng.choice(len(x), min(DETX_N, len(x)), replace=False))]
     x.to_csv(RAW / "sel_detx.csv", index=False)
 
@@ -98,6 +119,39 @@ def select(args, cat):
     nt.to_csv(RAW / "sel_noise.csv", index=False)
     print(f"select: magnitude events {len(m)} (M>={MAG_MIN}, declustered), detection-extra {len(x)} "
           f"(M{DETX_LO}-{MAG_MIN}), noise times {len(nt)}")
+
+
+def select_append(args, cat):
+    """Extend the selections from the current dataset end to --end; earlier rows are kept verbatim."""
+    meta = json.loads((OUT / "dataset_meta.json").read_text())
+    start, old_end = meta["start"], meta["end"]
+    if pd.Timestamp(args.end) <= pd.Timestamp(old_end):
+        raise SystemExit(f"--append needs --end after the current dataset end {old_end}")
+    rng = np.random.default_rng(int(pd.Timestamp(args.end).value // 10**9))
+    new = _window(cat, old_end, args.end)
+    m = _mag_events(cat, new)
+    old_x = pd.read_csv(RAW / "sel_detx.csv")
+    rate = len(old_x) / max(len(_detx_candidates(cat, _window(cat, start, old_end))), 1)
+    xc = _detx_candidates(cat, new)
+    x = xc.iloc[np.sort(rng.choice(len(xc), int(round(rate * len(xc))), replace=False))]
+    old_n = pd.read_csv(RAW / "sel_noise.csv")
+    t0, t1, t_old = (pd.Timestamp(v).value / 1e9 for v in (old_end, args.end, start))
+    n_new = int(round(len(old_n) * (t1 - t0) / (t0 - t_old)))
+    nt = pd.DataFrame({"t": np.sort(rng.uniform(t0, t1, n_new)).round(2)})
+    for df, name in ((m, "sel_mag.csv"), (x, "sel_detx.csv"), (nt, "sel_noise.csv")):
+        cols = pd.read_csv(RAW / name, nrows=0).columns
+        df[cols].to_csv(RAW / name, mode="a", header=False, index=False)
+    print(f"select --append {old_end} -> {args.end}: +{len(m)} magnitude events, +{len(x)} M2-3 "
+          f"(rate {rate:.3f}), +{len(nt)} noise times")
+
+
+def dataset_version(end):
+    """Content hash of what the dataset was built from (selection lists, hard-negative log, end date)."""
+    h = hashlib.sha256(end.encode())
+    for fp in (RAW / "sel_mag.csv", RAW / "sel_detx.csv", RAW / "sel_noise.csv", LIVE_LOG):
+        if fp.exists():
+            h.update(fp.read_bytes())
+    return h.hexdigest()[:12]
 
 
 # ---------------------------------------------------------------- fetch
@@ -337,7 +391,8 @@ def assemble(args, cat):
     if args.skip_detection:
         meta_fp = OUT / "dataset_meta.json"
         meta = json.loads(meta_fp.read_text()) if meta_fp.exists() else {}
-        meta.update({"mag_events": len(mag_ev), "mag_rows": len(mag_rows), "mag_includes_m2": True})
+        meta.update({"mag_events": len(mag_ev), "mag_rows": len(mag_rows), "mag_includes_m2": True,
+                     "end": args.end, "version": dataset_version(args.end)})
         meta_fp.write_text(json.dumps(meta, indent=1))
         return
 
@@ -368,7 +423,8 @@ def assemble(args, cat):
              hard_time=np.array(htime), hard_sta=np.array(hsta), stations=np.array(network.CODES))
     print(f"assemble: detection pos={len(pos)} noise={sum(len(n) for n in noise)} hard={sum(len(h) for h in hard)}")
     meta = {"start": args.start, "end": args.end, "mag_events": len(mag_ev), "mag_rows": len(mag_rows),
-            "det_pos": len(det_pos), "stations": network.CODES, "mag_includes_m2": True}
+            "det_pos": len(det_pos), "stations": network.CODES, "mag_includes_m2": True,
+            "version": dataset_version(args.end)}
     (OUT / "dataset_meta.json").write_text(json.dumps(meta, indent=1))
 
 
@@ -382,6 +438,7 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--skip-detection", action="store_true", dest="skip_detection",
                     help="assemble only magnitude.npz (low memory)")
+    ap.add_argument("--append", action="store_true", help="select: extend the current selections to --end")
     args = ap.parse_args()
     RAW.mkdir(parents=True, exist_ok=True)
     if args.stage in ("all", "check"):

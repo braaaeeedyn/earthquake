@@ -15,6 +15,10 @@ Reports (chronological 70/15/15 by event time): ensemble R^2/MAE vs the amp+dist
 nearest-1-station ablation, and a LIVE-LIKE score (10 km location error, nearest 3-6 stations).
 
   python scripts/demo_magnitude.py --retrain --seeds 5 --epochs 40
+  python scripts/demo_magnitude.py --out C.pt --compare data/processed/magnitude_ensemble.pt   # paired vs champion
+
+R^2 / MAE carry 95% event-bootstrap CIs; single-model R^2 carries a t-CI over seeds (seed variance, kept
+separate from sampling variance). With MLFLOW_TRACKING_URI set the run is logged (scripts/tracking.py).
 """
 import argparse
 import json
@@ -33,7 +37,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from sklearn.linear_model import LinearRegression  # noqa: E402
 from seismic_train_multi import MultiStationModel, adjacency  # noqa: E402
 
-from eq import locate, network  # noqa: E402
+import tracking  # noqa: E402
+from eq import locate, network, stats  # noqa: E402
 
 NPZ = ROOT / "data" / "processed" / "v2" / "magnitude.npz"
 CKPT = ROOT / "data" / "processed" / "magnitude_ensemble.pt"
@@ -140,8 +145,27 @@ def main():
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--retrain", action="store_true")
     ap.add_argument("--out", default=str(CKPT))
+    ap.add_argument("--compare", help="checkpoint to compare against, paired on the same test events (the champion)")
     args = ap.parse_args()
+    summary_fp = SUMMARY if Path(args.out) == CKPT else Path(args.out).with_suffix(".json")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    params = {"arch": "cnn-gnn-transformer", "input": "unit-peak+logamp", "lr": 1e-3, "weight_decay": 1e-4,
+              "epochs": args.epochs, "batch": 32, "seeds": args.seeds, "retrain": args.retrain}
+    with tracking.run("size", "train" if args.retrain else "evaluate", params):
+        run_main(args, summary_fp, device)
+
+
+def load_ensemble(path, Ahat, device):
+    ck = torch.load(path, weights_only=False, map_location=device)
+    models = []
+    for st in ck["states"]:
+        m = build_model(Ahat, device)
+        m.load_state_dict(st)
+        models.append(m)
+    return models, {k: ck[k] for k in ("la_mu", "la_sd", "am", "asd")}, ck
+
+
+def run_main(args, summary_fp, device):
     data = Data(device)
     tr, va, te = split_chrono(data.ev_t)
     y = data.mag
@@ -174,24 +198,18 @@ def main():
             val_r2.append(r2_mae(run(model, data, va, norms), y[va])[0])
             print(f"  seed {s}: val R2 {val_r2[-1]:+.3f}", flush=True)
             states.append({k: v.cpu() for k, v in model.state_dict().items()})
-        torch.save({"states": states, **norms, "input": "unit-peak+logamp", "stations": network.CODES,
+        torch.save({"states": states, **norms, "input": "unit-peak+logamp", "stations": network.CODES, "seeds": args.seeds,
                     "coords": data.coords, "trained": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     "git": subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
                                           text=True).stdout.strip(),
                     "dataset": json.loads((NPZ.parent / "dataset_meta.json").read_text())}, args.out)
         summary = {"seeds": args.seeds, "epochs": args.epochs, "seed_val_r2": val_r2}
     else:
-        summary = json.loads(SUMMARY.read_text())
+        summary = json.loads(summary_fp.read_text()) if summary_fp.exists() else {}
 
-    ck = torch.load(args.out, weights_only=False, map_location=device)
-    norms = {k: ck[k] for k in ("la_mu", "la_sd", "am", "asd")}
-    models = []
-    for st in ck["states"]:
-        m = build_model(Ahat, device)
-        m.load_state_dict(st)
-        models.append(m)
+    models, norms, ck = load_ensemble(args.out, Ahat, device)
 
-    def ens(evs, **kw):
+    def ens(evs, models=models, norms=norms, **kw):
         return np.mean([run(m, data, evs, norms, **kw) for m in models], axis=0)
 
     yte = y[te]
@@ -214,14 +232,38 @@ def main():
           f"  bias {np.mean(p_live - yte):+.2f}")
     print(f"  nearest-1-station ablation         R2 {r['near1'][0]:+.3f}  MAE {r['near1'][1]:.3f}")
     print(f"  amp+dist baseline                  R2 {r['baseline'][0]:+.3f}  MAE {r['baseline'][1]:.3f}")
+    # 95% CIs: sampling variance (event bootstrap) and, separately, seed variance (t-CI over single models)
+    _, *r2_ci = stats.bootstrap_ci(stats.r2, yte, p_all)
+    _, *mae_ci = stats.bootstrap_ci(stats.mae, yte, p_all)
+    _, *base_ci = stats.bootstrap_ci(stats.r2, yte, base)
+    d_base = stats.paired_bootstrap(stats.r2, yte, p_all, base)[:3]
+    seed = stats.seed_ci(singles) if len(singles) > 1 else (singles[0], float("nan"), float("nan"))
+    print(f"  95% CI: ensemble R2 {r2_ci[0]:.3f}-{r2_ci[1]:.3f}  MAE {mae_ci[0]:.3f}-{mae_ci[1]:.3f}  "
+          f"baseline R2 {base_ci[0]:.3f}-{base_ci[1]:.3f}")
+    print(f"  ensemble - baseline: dR2 {d_base[0]:+.3f} (CI {d_base[1]:+.3f}..{d_base[2]:+.3f})   "
+          f"single-model R2 over {len(singles)} seeds {seed[0]:.3f} (t-CI {seed[1]:.3f}-{seed[2]:.3f})")
     summary.update({"n_test": int(len(te)), "ens_r2": r["ensemble"][0], "ens_mae": r["ensemble"][1],
                     "single_r2": singles, "live_like_r2": r["live_like"][0], "live_like_mae": r["live_like"][1],
                     "live_like_bias": float(np.mean(p_live - yte)), "ablation_near_r2": r["near1"][0],
                     "baseline_r2": r["baseline"][0], "baseline_mae": r["baseline"][1],
-                    "mag_range": [float(yte.min()), float(yte.max())]})
-    SUMMARY.write_text(json.dumps(summary, indent=2))
-    make_figure(yte, p_all, base, r["ensemble"][0], r["baseline"][0])
-    print(f"  wrote {FIG.relative_to(ROOT)} and {SUMMARY.relative_to(ROOT)}")
+                    "mag_range": [float(yte.min()), float(yte.max())],
+                    "ens_r2_ci": r2_ci, "ens_mae_ci": mae_ci, "baseline_r2_ci": base_ci, "d_r2_vs_baseline": d_base,
+                    "single_r2_seed_ci": [seed[1], seed[2]], "test_start": float(data.ev_t[te].min()),
+                    "dataset_version": ck.get("dataset", {}).get("version", "v2-2026-09-01")})
+    if args.compare:                                     # paired vs another checkpoint (the gate's input)
+        om, on, _ = load_ensemble(args.compare, Ahat, device)
+        po = ens(te, models=om, norms=on)
+        summary["vs"] = {"ckpt": str(args.compare), "d_r2": stats.paired_bootstrap(stats.r2, yte, p_all, po)[:3],
+                         "d_mae": stats.paired_bootstrap(stats.mae, yte, p_all, po)[:3]}
+        print(f"  vs {args.compare}: dR2 {summary['vs']['d_r2'][0]:+.4f} (CI {summary['vs']['d_r2'][1]:+.4f}.."
+              f"{summary['vs']['d_r2'][2]:+.4f})  dMAE {summary['vs']['d_mae'][0]:+.4f}")
+    summary["mlflow_run_id"] = tracking.active_run_id()
+    summary_fp.write_text(json.dumps(summary, indent=2))
+    tracking.log_metrics(summary)
+    tracking.log_files([args.out, summary_fp])
+    if summary_fp == SUMMARY:
+        make_figure(yte, p_all, base, r["ensemble"][0], r["baseline"][0])
+    print(f"  wrote {summary_fp}")
 
 
 def make_figure(yte, ens, base, r2_e, r2_b):

@@ -17,7 +17,8 @@ is cut the way its training data was cut:
 
 A `source` object supplies waveforms (live: SeedLink buffers; replay: archived FDSN data):
   source.z(code, t1, t2)        -> raw vertical samples at 100 Hz (np.ndarray) or None
-  source.zne(code, t1, t2)      -> (3, n) response-removed velocity (m/s) or None
+  source.zne(code, t1, t2, sens=False) -> (3, n) velocity (m/s) or None: response-removed (sizing), or with
+                                  sens=True scaled by the station's sensitivity only (quick check, no taper wait)
   source.end(code)              -> latest data time available for that station (epoch s) or None
 """
 from __future__ import annotations
@@ -39,6 +40,14 @@ NPTS = 3000
 ZNE_PRE_S, ZNE_POST_S = 30.0, 6.0
 CONFIG_FILE = Path(__file__).resolve().parents[2] / "data" / "processed" / "v2" / "pipeline_config.json"
 EARLY_FILE = CONFIG_FILE.parent / "early_mag.json"     # fitted by scripts/fit_early_magnitude.py
+# Alert-speed profiles for the FIRST (provisional) message; each subscriber picks one (push_tokens.json "mode").
+# Both run for every confirmed event. (fit file, post-window margin s, sensitivity-only instead of response removal)
+#   standard: 4 s of P, full response removal + the 6 s taper margin  -- most safeguards, first msg ~33-35 s
+#   fast:     2 s of P, sensitivity-scaled, no margin (1-18 Hz is flat for broadband sensors, so no taper wait)
+#             -- first msg ~26 s, quick size less accurate, more retractions
+# Measured on 20 replayed days: replay_archive.py early-variants -> HOW_IT_WORKS.md section 5.3.
+EARLY_PROFILES = {"standard": (EARLY_FILE, ZNE_POST_S, False),
+                  "fast": (CONFIG_FILE.parent / "early_mag_T2.json", 0.0, True)}
 
 
 @dataclass
@@ -101,6 +110,17 @@ def det_prep(windows):
     return ((x - x.mean(-1, keepdims=True)) / (x.std(-1, keepdims=True) + 1e-12)).astype(np.float32)
 
 
+def window_features(x):
+    """Scale-free drift features of det_prep'd windows (N, 3000): crest = log10(max|x| / rms) and
+    hf_ratio = share of 1-18 Hz power above 5 Hz. Identical for training and live windows (QuakeOps drift)."""
+    x = np.asarray(x, np.float64)
+    crest = np.log10(np.abs(x).max(-1) / (np.sqrt((x ** 2).mean(-1)) + 1e-12) + 1e-12)
+    spec = np.abs(np.fft.rfft(x, axis=-1)) ** 2
+    f = np.fft.rfftfreq(x.shape[-1], 1 / SR)
+    hf = spec[:, (f >= 5) & (f < 18)].sum(-1) / (spec[:, (f >= 1) & (f < 18)].sum(-1) + 1e-30)
+    return crest, hf
+
+
 def detect_probs(model, windows, device="cpu"):
     """P(quake) for a batch of raw 30 s vertical windows (det_prep, as in training)."""
     import torch
@@ -135,13 +155,25 @@ class Event:
     mag_spread: float | None = None
     sized_stations: list = field(default_factory=list)
     silent_near: int = 0
-    early_mag: float | None = None        # quick check: first T s of P at the picked stations
-    early_at: float | None = None         # data time the quick check ran
+    early: dict = field(default_factory=dict)   # quick check per profile: mode -> {"mag", "at" (data time)}
     sized_at: float | None = None         # data time the full sizing ran
 
     @property
     def id(self):
         return f"{int(self.t0)}_{self.lat:.2f}_{self.lon:.2f}"
+
+    # the standard profile's quick check (the original single-stage fields, kept for logs and callers)
+    @property
+    def early_mag(self):
+        return self.early.get("standard", {}).get("mag")
+
+    @early_mag.setter
+    def early_mag(self, v):
+        self.early.setdefault("standard", {})["mag"] = v
+
+    @property
+    def early_at(self):
+        return self.early.get("standard", {}).get("at")
 
 
 class Pipeline:
@@ -152,11 +184,16 @@ class Pipeline:
         self.source, self.cfg = source, cfg or Config.load()
         self.loc = locate.Locator(self.coords)
         self.on_event = on_event or (lambda ev: None)
-        self.on_early = on_early or (lambda ev: None)
-        # early: "auto" = load scripts/fit_early_magnitude.py's fit if present; None = no quick check; or a dict
-        self.early = ((json.loads(EARLY_FILE.read_text()) if EARLY_FILE.exists() else None)
-                      if isinstance(early, str) else early)
-        self.early_pending: list[Event] = []
+        self.on_early = on_early or (lambda ev, mode: None)
+        # early: "auto" = every EARLY_PROFILES fit that exists; None = no quick check; a dict = one standard-profile
+        # fit (tests); or {mode: fit} with optional "post"/"sens" keys
+        if isinstance(early, str):
+            early = {m: {**json.loads(f.read_text()), "post": post, "sens": sens}
+                     for m, (f, post, sens) in EARLY_PROFILES.items() if f.exists()}
+        elif isinstance(early, dict) and "T_s" in early:
+            early = {"standard": early}
+        self.early = {m: {"post": ZNE_POST_S, "sens": False, **e} for m, e in (early or {}).items()}
+        self.early_pending: list[tuple[Event, str]] = []
         self.picks: list[Pick] = []
         self.last_pick = {}                           # sta -> time of last pick (refractory)
         self.last_scan = {}                           # sta -> data time of last scanned window end
@@ -224,8 +261,7 @@ class Pipeline:
                         best[s].used = True
                     self.events.append(ev)
                     self.pending.append(ev)
-                    if self.early is not None:
-                        self.early_pending.append(ev)
+                    self.early_pending += [(ev, m) for m in self.early]
                     return
         # tentative: picks that waited long enough without forming a confirmed event
         stale = [p for p in free if now - p.t > cfg.tentative_after]
@@ -295,12 +331,14 @@ class Pipeline:
     # ------------------------------------------------------------ quick check (preliminary size)
     def early_ready(self, now):
         """Preliminary magnitude from only the first T s after P at the PICKED stations (classic early-
-        warning amplitude scaling, fitted by scripts/fit_early_magnitude.py). Runs ~T + 6 s after the
-        third pick -- ~20 s before the full sizing -- and decides whether a first, provisional push goes out."""
-        e, cfg = self.early, self.cfg
-        for ev in list(self.early_pending):
+        warning amplitude scaling, fitted by scripts/fit_early_magnitude.py), once per alert-speed profile:
+        T s (+ that profile's margin) after the third pick. Decides whether that profile's first, provisional
+        push goes out."""
+        cfg = self.cfg
+        for ev, mode in list(self.early_pending):
+            e = self.early[mode]
             picked = sorted(ev.stations, key=lambda i: ev.picks[self.codes[i]])
-            ideal = ev.picks[self.codes[picked[cfg.min_stations - 1]]] + e["T_s"] + ZNE_POST_S
+            ideal = ev.picks[self.codes[picked[cfg.min_stations - 1]]] + e["T_s"] + e["post"]
             if now < ideal:
                 continue
             d = locate.haversine_km(ev.lat, ev.lon, self.coords[:, 0], self.coords[:, 1])
@@ -308,30 +346,31 @@ class Pipeline:
             for i in picked:
                 tp = ev.picks[self.codes[i]]
                 end = self.source.end(self.codes[i])
-                if end is None or end < tp + e["T_s"] + ZNE_POST_S:
+                if end is None or end < tp + e["T_s"] + e["post"]:
                     continue
-                x = self.source.zne(self.codes[i], tp, tp + e["T_s"])
+                x = self.source.zne(self.codes[i], tp, tp + e["T_s"], sens=e["sens"])
                 if x is None or not np.isfinite(x).all():
                     continue
                 peak = float(np.abs(x).max()) + 1e-12
                 est.append(e["a"] * np.log10(peak) + e["b"] * np.log10(max(float(d[i]), 1.0)) + e["c"])
             if len(est) < cfg.min_stations and now < ideal + cfg.early_max_wait:
                 continue
-            self.early_pending.remove(ev)
+            self.early_pending.remove((ev, mode))
             if est:
-                ev.early_mag, ev.early_at = float(np.median(est)), now
-                self.on_early(ev)
+                ev.early[mode] = {"mag": float(np.median(est)), "at": now}
+                self.on_early(ev, mode)
 
-    def early_push_eligible(self, ev):
-        """First, provisional push: confirmed location AND the quick check clears the validated threshold."""
-        return bool(self.early is not None and ev.confirmed and ev.early_mag is not None
-                    and ev.early_mag >= self.early["early_min_mag"])
+    def early_push_eligible(self, ev, mode="standard"):
+        """First, provisional push for one alert-speed profile: confirmed location AND that profile's quick check
+        clears its validated threshold."""
+        e, r = self.early.get(mode), ev.early.get(mode, {})
+        return bool(e and ev.confirmed and r.get("mag") is not None and r["mag"] >= e["early_min_mag"])
 
     def advance(self, now):
         """Everything after detection, in order: associate/locate -> quick check -> full sizing.
         Live (`step`) and the replay harness both call this, so they can never drift apart."""
         self.associate(now)
-        if self.early is not None:
+        if self.early:
             self.early_ready(now)
         self.size_ready(now)
 

@@ -33,6 +33,12 @@ SCEDC waveform archive ─┤                                         │
 One engine (`src/eq/pipeline.py`) runs both live and in the replay harness. What is measured offline is
 the same code that runs on the server.
 
+**QuakeOps** (§12) wraps this in an MLOps loop: training runs are tracked in MLflow, models are versioned
+in its registry (`champion` / `challenger`), a monthly Dagster job on the PC grows the dataset, retrains,
+and promotes a challenger only through a statistical + replay gate, and a daily job on the VM records the
+champion (installing it only when allowed) and checks the live stream for drift. **Status (2026-10-05):
+the code is in the repo and tested on the PC; none of it runs on the VM or the live site yet** (§12.0).
+
 ---
 
 ## 2. The station network — `src/eq/network.py`
@@ -141,7 +147,9 @@ Training data and live data are aligned by the **same picker**.
 
 - **Events and noise:** chronological 70/15/15 by time.
   - Detection: validation starts 2019-07-07, test starts 2022-04-15.
-  - Magnitude: validation starts 2019-07-06, test starts 2021-10-11.
+  - Magnitude: validation starts 2019-07-10, test starts 2021-08-09.
+  - As QuakeOps adds months (§12), the split is recomputed by the same rule, so the newest data is always
+    in the test set.
 - **Hard negatives:** split by date.
   - Train: Sep 22–28.
   - Validation: Sep 29 – Oct 1.
@@ -178,13 +186,29 @@ Training data and live data are aligned by the **same picker**.
 
   | | Result |
   |---|---|
-  | ROC-AUC | **0.9998** |
-  | MCC | **0.886** |
-  | STA/LTA on the same input | AUC 0.816 |
+  | ROC-AUC | **0.9998** (95% CI 0.9997–0.9999) |
+  | MCC | **0.886** (0.868–0.902) |
+  | STA/LTA on the same input | AUC 0.816 (0.805–0.828); paired difference +0.184 (+0.172…+0.195) |
   | AUC with P at 2 / 12 / 22 s into the window | 0.9997 / 0.9999 / 0.9997 |
-  | Per-window false-positive rate on held-out live noise | 0.25% |
+
+
+  False positives per 30 s window. The live daemon triggers at **0.6** (`pipeline_config.json`), not at
+  the checkpoint's 0.9987, so both are reported:
+
+  | Threshold | Test noise (n=2,339) | Held-out live noise, Oct 2–5 (n=397) | Event windows caught |
+  |---|---|---|---|
+  | 0.6 (live trigger) | **1.41%** (33) | 0.25% (1) | 99.6% |
+  | 0.9987 (checkpoint MCC) | 0.00% | 0.25% (1) | 91.9% |
+
+  A per-window trigger is not an alert. It must also give a pick with SNR ≥ 3, and the picks of 3
+  stations must locate one source with no silent nearer station. False *events* are therefore measured
+  by the replay harness (§6.3: 3.5 false confirmed events/week, 0 false pushes) and, live, by the
+  nightly crosscheck.
 
 - **Memorization check:** train, validation and test AUC are 0.9998 / 0.9999 / 0.9998.
+- **Confidence intervals** (`src/eq/stats.py`): percentile bootstrap, 2,000 resamples, **clustered by
+  event**. Every station window of one quake (and every station's noise window at one random time)
+  resamples together, because treating them as independent would make the interval too narrow.
 
 ### 4.2 Size — `scripts/demo_magnitude.py`, `MultiStationModel` in `scripts/seismic_train_multi.py`
 
@@ -217,12 +241,19 @@ Training data and live data are aligned by the **same picker**.
 
   | | R² | MAE (magnitude units) |
   |---|---|---|
-  | Deep ensemble | **0.951** | **0.098** |
+  | Deep ensemble | **0.951** (95% CI 0.943–0.959) | **0.098** (0.093–0.104) |
   | Live-like (10 km location error, nearest 3–6 stations) | 0.939 | 0.109 |
   | Nearest single station only | 0.808 | 0.203 |
-  | Amplitude + distance linear baseline | 0.886 | 0.158 |
+  | Amplitude + distance linear baseline | 0.886 (0.871–0.898) | 0.158 |
 
 - **Memorization check:** train, validation and test MAE are 0.089 / 0.099 / 0.098.
+- **Seed-averaged result (10 seeds, `demo_magnitude.py --retrain --seeds 10`).** Two separate
+  uncertainties:
+  - *Seed variance:* a single model scores R² **0.949**, 95% t-CI 0.948–0.951 over 10 seeds (range
+    0.943–0.952).
+  - *Sampling variance:* the 10-seed ensemble scores R² **0.952** (event bootstrap 0.944–0.959), MAE 0.097.
+  - The ensemble beats the baseline by ΔR² **+0.067** (paired CI +0.056…+0.079). The ensemble's gain over
+    one model (+0.003) is smaller than the sampling CI, so 5 seeds are kept live.
 
 ### 4.3 Quick check — `scripts/fit_early_magnitude.py` → `data/processed/v2/early_mag.json`
 
@@ -285,11 +316,32 @@ runs these steps:
 
 ### 5.3 Quick check (`early_ready`)
 
-Once the third pick plus 4 s plus a 6 s margin of data has arrived:
+Each subscriber chooses an **alert speed** for the first message (`mode` in `push_tokens.json`; no mode means
+standard). Both profiles run for every confirmed event (`EARLY_PROFILES` in `pipeline.py`):
 
-1. Take each picked station's 3-component velocity for [P, P + 4 s]. The response correction runs on
-   [t − 30 s, t + 6 s], the same in live and replay.
-2. Apply the quick-check formula and take the median.
+| Profile | P-wave used | Conversion | Runs when | Fit |
+|---|---|---|---|---|
+| **Standard** (default, most safeguards) | 4 s | full response removal on [P − 30 s, P + 4 + 6 s] | the third pick + 4 s + 6 s margin | `early_mag.json`, threshold 3.04 |
+| **Fast** | 2 s | sensitivity scaling only on [P − 30 s, P + 2 s]; broadband responses are flat in 1–18 Hz, so there's no end taper and no margin | the third pick + 2 s | `early_mag_T2.json`, threshold 3.05 |
+
+Each profile computes M_quick = median over the picked stations of a·log10(peak 3-C velocity) + b·log10(distance) + c,
+with its own a, b, c.
+
+**What the choice costs** (`replay_archive.py early-variants`, 20 replayed days, `early_variants.json`):
+
+| First-message variant | Held-out test days: first messages / real M2.5+ / retracted / no quake | Median after origin | Quick-size MAE (test / validation) |
+|---|---|---|---|
+| **Standard** | 6 / 6 / 1 / 0 | 33.4 s | 0.21 / 0.36 |
+| 4 s, sensitivity-scaled, no margin (not offered) | 6 / 6 / 1 / 0 | 27.7 s | 0.20 / 0.35 |
+| **Fast** (2 s, sensitivity-scaled, no margin) | 7 / 6 / 2 / 0 | 25.9 s | 0.26 / 0.56 |
+| push at location, no size (not offered) | 72 / 8 / 67 / 5 | 25.6 s | — |
+
+- **Fast** on validation days: 5 first messages, 3 for real M2.5+ quakes, 1 retracted, and 1 for no catalogued
+  quake (Standard: 4 / 3 / 0 / 1).
+- **The middle row** costs nothing in accuracy or false alerts. It's the candidate if Standard should ever
+  become faster.
+- **Pushing at location** would mean about 7 first messages a day, nearly all retracted.
+- **The floor** is the third station's confirmation, about 25 s after origin.
 
 ### 5.4 Full sizing (`size_ready`)
 
@@ -307,7 +359,8 @@ if stations are late):
 
 | Stage | Condition | Push |
 |---|---|---|
-| Provisional | Confirmed and quick check ≥ 3.04 | "Earthquake detected (*region*) — confirming size" with the preliminary size |
+| Provisional (standard subscribers) | Confirmed and the standard quick check ≥ 3.04 | "Earthquake detected (*region*) — confirming size" with the preliminary size |
+| Provisional (fast subscribers) | Confirmed and the fast quick check ≥ 3.05 | "Fast alert: earthquake detected (*region*)" with a rough size, marked "earlier, less certain" |
 | Confirmation | Confirmed and full magnitude ≥ **3.0** | "M*x.x* earthquake confirmed (*region*)" with the distance from your nearest sensor and the expected shaking |
 | Retraction | A provisional push went out but the full magnitude is < 3.0 (or couldn't be sized) | "Update: smaller quake (*region*) … you can disregard the earlier alert" |
 
@@ -333,8 +386,10 @@ if stations are late):
 
 ### 5.7 Timing
 
-On replayed days (no network delay), median provisional push ≈ **35 s** after the origin and median
-confirmation ≈ **55 s** after. Live adds the SeedLink delay (about 2–5 s).
+On replayed days (no network delay), the median provisional push comes ≈ **33–35 s** after the origin on the
+standard setting and ≈ **26 s** on fast. The median confirmation is ≈ **55 s** after for both. Live adds the
+SeedLink delay (about 2–5 s). The confirmation goes to every subscriber in reach. A retraction goes only to
+subscribers whose profile sent them a provisional push.
 
 ---
 
@@ -410,9 +465,12 @@ still below the push floor.
 | `GET /api/ca?window=day\|week\|month\|year\|all` | The largest SoCal quakes in the window from USGS (details below). |
 | `GET /api/geocode?q=` | City lookup (Nominatim, limited to California) for "find sensors near you". |
 | `GET /api/version` | `{latest, min}` app versions for the in-app update gate. |
-| `POST /api/register-push` | Store `{token, stations, name}`; it upserts by device token. Station codes are validated. |
+| `GET /api/health` | QuakeOps: `models` (registry champions, metrics ± CI, lineage, promotion history, from `models.json`), `drift` (`drift_status.json`), and `loaded` (the versions the daemon actually runs). Each is `null` until its job has run. |
+| `POST /api/register-push` | Store `{token, stations, name, mode}`; it upserts by device token. Station codes are validated; `mode` is `standard` (default, also for older app versions) or `fast`. |
 | `POST /api/unregister-push` | Remove a device. |
 | `POST /api/contact` | Relay a support message by SMTP (nothing stored). |
+
+`/api/events` and `/api/archive` are older routes from the USGS daily feed. The current site doesn't use them.
 
 **How `/api/ca` filters and marks quakes:**
 - It lists only quakes the pipeline **could catch**:
@@ -445,11 +503,23 @@ No location is stored.
     `socal_cities.json`) from 2×.
 - **Alert me near me** (mobile app only):
   - follow a **region**, which selects all its sensors and opens them, then turn single sensors off;
+  - choose an **alert speed** for the first notice: Standard (most safeguards) or Fast (earlier, rougher size,
+    more retractions), §5.3;
   - "Use my location" or a city search selects the nearest region if a sensor is within 150 km;
   - your coordinates are only used on the device to rank regions;
   - registering sends the chosen station codes and the push token.
 - **Biggest Southern California quakes:** Day / Week / Month / Year / All time from `/api/ca`, each
   with its caught / seen / not-caught mark.
+- **Model health** (`/health`, footer link; **in the code, not on the live site until the next deploy**):
+  the live Detect and Size versions with held-out metrics ± 95% CI against their baselines, a drift pill
+  per station (outlined = ok, gray = watch, black = drifting, dashed = no data; each labelled in text),
+  and the promotion history. Each part reads "hasn't reported yet" until its VM job has run (§12.0). The
+  result cards also show their 95% CI under the headline number (from `seismic.json`; same deploy).
+- **Design drafts** (`/home1`–`/home10`, `app/src/drafts/`): ten alternative homepage layouts built from the
+  same components and numbers, with a floating switcher between them. They're a separate lazily-loaded chunk,
+  so the live homepage bundle is unchanged. Drafts 2, 7 and 9 try colors outside the locked monochrome palette
+  (exploration only). Design context lives in `PRODUCT.md` (audience, voice, principles) and `DESIGN.md`
+  (visual system).
 - **App version gate:** the app compares its version with `/api/version`. Behind `min` on major or
   minor means blocked, with a link to the `/app` download page. A patch gap is only a notice.
 
@@ -465,6 +535,13 @@ No location is stored.
   since go-live and writes `data/processed/crosscheck_report.json`, split into **confirmed** (can
   alert), **pushed** and **tentative** (logged only), each with a +1 h chance baseline. Each USGS quake in
   the "Biggest quakes" list is also checked live, at request time (§7).
+- **QuakeOps units (in `deploy/`, NOT installed yet; DEPLOY.md "QuakeOps"):**
+- **`seismicsocal-quakeops.timer`** (09:30 UTC) runs `tracking.py pull` (resolves the registry
+  champion, writes `models.json`, and installs a new champion only if `QUAKEOPS_AUTO_DEPLOY=1`), then
+  `drift_check.py` (§12).
+- **`mlflow.service`** runs the MLflow tracking server and registry on `127.0.0.1:5000`. It uses its own
+  venv, SQLite and local artifacts. Caddy publishes it at `mlflow.seismicsocal.duckdns.org` behind
+  basic auth, for the PC's training runs.
 - **Caddy** provides HTTPS (Let's Encrypt), serves `app/dist`, and proxies `/api/*` to `127.0.0.1:8000`.
 - **What ships:**
   - the code (from git);
@@ -474,8 +551,14 @@ No location is stored.
   - `.env` and `fcm-service-account.json`.
 - **After shipping:** checkpoint sha256 hashes are compared between the PC and the VM, then the service
   is restarted.
-- **Policy:** after any model or pipeline change, run in **shadow mode** (`PUSH_ENABLED=0`). Score it
-  with `crosscheck_events.py`, then enable pushes.
+- **Policy:** after any pipeline change, run in **shadow mode** (`PUSH_ENABLED=0`). Score it with
+  `crosscheck_events.py`, then enable pushes. A model change that passed the QuakeOps gate has already
+  passed an offline shadow run, the replay rule G3. It still installs only when you allow it, either with
+  `QUAKEOPS_AUTO_DEPLOY=1` or by running `tracking.py pull --apply` by hand.
+- **CI/CD** (`.github/workflows/ci.yml`): every PR and push runs ruff, pytest, the daemon selftest and the
+  site build. A push to `main` then streams `git archive` and `app/dist` to the VM, the same tar deploy as
+  above, and restarts the service. This step is skipped until the `VM_HOST` / `VM_SSH_KEY` secrets exist.
+  Models never go through git.
 - **Android:** `scripts/build_apk.sh` with `VITE_API_BASE=https://seismicsocal.duckdns.org` builds the
   APK from the web build. That needs the Android project with `google-services.json`. The APK is
   served at `/app`.
@@ -493,8 +576,9 @@ python scripts/replay_archive.py scan --start 2026-09-29,2020-09-07,2026-08-18 -
 python scripts/replay_archive.py calibrate --start 2026-09-29,2020-09-07 --end 2026-10-02,2020-09-14
 python scripts/replay_archive.py run --start 2026-10-02,2026-08-18 --end 2026-10-05,2026-08-25 --tag test
 python scripts/replay_archive.py events
-python scripts/make_figures.py                        # site figures
-python scripts/live_watch.py --selftest && pytest     # logic checks (18 tests)
+python scripts/make_figures.py                        # site figures + publish metrics/CIs to seismic.json
+python scripts/live_watch.py --selftest && pytest     # logic checks (24 tests)
+python scripts/tracking.py register-legacy            # QuakeOps: current models -> registry v1 @champion
 cd app && npm run build                               # site
 ```
 
@@ -511,3 +595,99 @@ cd app && npm run build                               # site
 - **Small quakes:** below M2, magnitudes read slightly high.
 - **Station availability:** a station can drop off the public SeedLink relay. The pipeline then works
   with the stations that remain.
+
+---
+
+## 12. QuakeOps: tracking, retraining, promotion, drift
+
+The design and its decisions are in `QUAKEOPS_IMPLEMENTATION.md`. This section describes how it runs.
+
+### 12.0 Status (2026-10-05)
+
+| Part | State |
+|---|---|
+| CIs, paired comparisons, seed-averaged write-up, `seismic.json` CIs | done on the PC (numbers in §4) |
+| `retrain.py` gate, Dagster job, `build_dataset.py --append`, replay `--det/--mag` | in the repo. Gate checked on a dry run (champion vs itself); the append selection checked to reproduce today's lists. **No end-to-end retrain run yet** |
+| MLflow tracking + `register-legacy` | checked against a throwaway local server. **No MLflow server on the VM yet** |
+| `tracking.py pull`, the daemon's restart on a new version | in the repo, **untested against a live server** |
+| Drift features (`live_watch.py`) + `drift_check.py` | checked on synthetic days. **Features start logging once the new `live_watch.py` is deployed** |
+| `/health` page, `/api/health`, CIs on the cards | built (`npm run build`). **Not on the site until the next deploy** |
+| CI (`.github/workflows/ci.yml`) | runs on the first push to GitHub. The deploy step waits for the `VM_HOST` / `VM_SSH_KEY` secrets |
+
+### 12.1 Tracking and registry — `scripts/tracking.py`
+
+- `tracking.py` is the **only** module that imports mlflow. Without `MLFLOW_TRACKING_URI` every call is a
+  no-op, so all scripts run offline and in CI unchanged.
+- **What a training run logs:** `demo_detect.py` and `demo_magnitude.py` log their params, lineage (git
+  commit, a dirty-tree flag, dataset version, torch/CUDA), every metric with its CI bounds, and the
+  checkpoint plus summary JSON under the run's `model/` directory.
+- **Registered models:** `detector` (with sidecar `drift_reference.csv`) and `magnitude` (with
+  `early_mag.json` and `tt_correction.json`, which are fitted from the same dataset). Each version is
+  tagged with its checkpoint sha256. Aliases are `champion` and `challenger`.
+- `register-legacy` registers the models that went live on 2026-10-05 as v1 `@champion`. It has been
+  checked against a local test server, including that a second run doesn't duplicate anything. It has
+  not yet been run against the VM registry.
+- **`pull`** (VM, daily) writes `data/processed/models.json` (versions, metrics, lineage, promotion
+  history). With `--apply`, or `QUAKEOPS_AUTO_DEPLOY=1`, it also downloads a new champion, verifies its
+  sha256, and swaps it in atomically at the live paths. `live_watch.py` sees the new `deployed` version
+  in `models.json` and exits, and `server.py`'s supervisor restarts it on the new model.
+
+### 12.2 Monthly retrain — `scripts/retrain.py` + `scripts/quakeops_dagster.py`
+
+Run by Dagster on the PC, on day 3 of each month for the previous month. The schedule is off until you
+switch it on in the Dagster UI, and no retrain has run yet. Each stage can be resumed
+(`data/processed/retrain/<month>/state.json`).
+
+1. **data:** `build_dataset.py --append --end <month end>`.
+   - M3+ events are declustered per cell and month, so months already in the dataset never change.
+   - The M2–3 sample and the noise times are drawn for the new month only, at the original rate.
+   - The fetch cache means only the new month downloads.
+   - `dataset_meta.json` gets a new `version`, a hash of the selection lists. The 2026-09-01 dataset is
+     `2105a42878a2`.
+2. **train:** both demo scripts with `--retrain --out <month dir> --compare <champion>`. The champion is
+   re-scored on the **challenger's** test split, which neither model has trained or validated on (the
+   split rule is unchanged, §3.6). Then the quick-check fit, the travel-time table and the drift
+   reference are built, and the run is registered `@challenger`.
+3. **replay:** the 10 held-out replay days, run three ways: (champion, champion), (challenger detector,
+   champion size) and (champion detector, challenger size). The challenger detector re-scans into its own
+   cache `replay/<sha12>/`. Event-centric sizing runs for both magnitude models.
+4. **gate:** the rules below. Results go to `gate.json` and an MLflow `quakeops-gate` run.
+5. **promote:** for each model that passes, `@champion` moves. The version is tagged with the reason, gate
+   run and previous champion, a record is appended to `promotions.jsonl`, the files are installed at the
+   PC's live paths, `seismic.json` is republished, and an email is sent. A model that fails stays
+   `@challenger`, tagged with the rules it failed. `retrain.py rollback --model M --to N` reverts.
+
+### 12.3 Promotion gate
+
+Detect and size are decided independently. A rule that can't be evaluated is logged as `SKIPPED`, never
+as a silent pass.
+
+| Rule | Detect | Size |
+|---|---|---|
+| G1 beats the classic baseline | paired ΔAUC vs STA/LTA, CI low > 0 | paired ΔR² vs amp+dist, CI low > 0 |
+| G2 non-inferior to the champion (same test set, paired) | ΔAUC ≥ −0.001 and CI high ≥ 0; ΔMCC ≥ −0.02; per-window false-trigger rate **at the live trigger (0.6)** ≤ champion + 0.5 pp on test noise and + 0.25 pp on held-out live noise | ΔR² ≥ −0.01 and CI high ≥ 0; ΔMAE ≤ +0.01 |
+| G3 replay acceptance (calibrated config fixed) | confirmed precision ≥ 0.85 and ≥ chance + 0.5; no false provisional or final pushes; in-coverage M3 recall ≥ champion; pushed magnitudes within 0.3 of the catalogue | the same push and magnitude checks; event-centric MAE ≤ champion + 0.02 |
+| G4 tests | pytest + `live_watch.py --selftest` | same |
+| G5 lineage | clean git tree; commit, dataset version and seeds recorded; replay test days inside the challenger's test period | same |
+| G6 reason to switch | newer data than the champion, or a superiority CI > 0 | same |
+
+The gate never changes `pipeline_config.json`. A detector that needs a new trigger threshold fails G3,
+and calibrating it is a deliberate, manual step.
+
+### 12.4 Drift — `scripts/drift_check.py`
+
+- **Live features:** `live_watch.py` logs one window per station every 30 s to
+  `data/processed/features/<date>.csv`:
+  - the detector's score;
+  - `crest` = log10(max/rms);
+  - `hf_ratio` = the share of 1–18 Hz power above 5 Hz.
+  All three are computed on the `det_prep` input. That makes them scale-free and comparable with
+  training data. Raw amplitude isn't comparable: training noise is normalized, live data is raw counts.
+- **Reference:** the same features on each station's **training-split noise windows**, about 280–650
+  per station, scored by the champion.
+- **Daily check:** Evidently `DataDriftPreset` (normed Wasserstein > 0.1) per station, yesterday against
+  the reference. Status is `ok` (no feature drifted), `watch` (1), `drifting` (2 or more) or
+  `insufficient` (fewer than 500 rows).
+- **Outputs:** HTML reports in `data/processed/drift/<date>/`, `drift_status.json` and
+  `drift_history.jsonl`. An email is sent when a station has been drifting for 2 days in a row. Data
+  older than 90 days is deleted.
