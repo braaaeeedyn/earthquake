@@ -169,52 +169,79 @@ first: `python scripts/migrate_subscriptions.py` (dry run) then `--apply` (keeps
 
 ## QuakeOps (MLflow registry, daily champion pull + drift, CI deploy)
 
-How it works: HOW_IT_WORKS.md §12. These are one-time setup steps. Each needs your SSH session, because
-the key has a passphrase.
+How it works: HOW_IT_WORKS.md §12. This is a one-time setup, done in this order:
+- `PC$` = Git Bash on the Windows PC at the repo root;
+- `VM$` = an SSH session on the VM (`ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169`).
 
-**1. MLflow server on the VM** (its own venv, so MLflow's pins stay away from the daemon's):
+**1. Ship the current code** (no restart needed yet):
 ```bash
-sudo mkdir -p /opt/mlflow && sudo chown ubuntu: /opt/mlflow
-python3 -m venv /opt/mlflow/.venv && /opt/mlflow/.venv/bin/pip install mlflow
-sudo cp /opt/seismicsocal/deploy/mlflow.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now mlflow && curl -s 127.0.0.1:5000/health   # OK
+PC$ git archive HEAD | ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169 'tar -x -C /opt/seismicsocal'
 ```
-**2. Caddy:** run `caddy hash-password`, paste the hash into the `mlflow.` block of `deploy/Caddyfile`,
-append that block to `/etc/caddy/Caddyfile`, then `sudo systemctl reload caddy`. First check that
-`nslookup mlflow.seismicsocal.duckdns.org` resolves to the VM.
-
-**3. Daemon venv + `.env`:**
+**2. MLflow server** (its own venv keeps MLflow's pins away from the daemon's):
 ```bash
-/opt/seismicsocal/.venv/bin/pip install mlflow-skinny evidently==0.7.23
-# VM .env:  MLFLOW_TRACKING_URI=http://127.0.0.1:5000   OPS_EMAIL_TO=you@example.com
-#           QUAKEOPS_AUTO_DEPLOY=0   (1 = install a gate-passed champion automatically)
+VM$ sudo mkdir -p /opt/mlflow && sudo chown ubuntu: /opt/mlflow
+VM$ python3 -m venv /opt/mlflow/.venv && /opt/mlflow/.venv/bin/pip install -q mlflow
+VM$ sudo cp /opt/seismicsocal/deploy/mlflow.service /etc/systemd/system/
+VM$ sudo systemctl daemon-reload && sudo systemctl enable --now mlflow
+VM$ sleep 20; curl -s 127.0.0.1:5000/health          # -> OK
 ```
-PC `.env`: `MLFLOW_TRACKING_URI=https://mlflow.seismicsocal.duckdns.org`, `MLFLOW_TRACKING_USERNAME=quakeops`,
-`MLFLOW_TRACKING_PASSWORD=<the password>`.
-
-**4. Deploy the code** (the usual tar stream), then from the **PC**: `python scripts/tracking.py register-legacy`.
-This registers today's checkpoints as v1 `@champion` and logs the drift reference with the detector.
-
-**5. Daily job on the VM:**
+**3. Password-protected public address** (`mlflow.seismicsocal.duckdns.org` already resolves to the VM):
 ```bash
-sudo cp deploy/seismicsocal-quakeops.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now seismicsocal-quakeops.timer
-sudo systemctl start seismicsocal-quakeops.service && cat data/processed/models.json   # first pull
+VM$ caddy version                                    # 2.8+ spells it basic_auth; older versions: basicauth
+VM$ caddy hash-password                              # type a password (keep it), copy the $2a$... hash it prints
+VM$ sudo nano /etc/caddy/Caddyfile                   # append the mlflow block from deploy/Caddyfile, with the hash pasted in
+VM$ sudo systemctl reload caddy
+PC$ curl -u quakeops:YOUR_PASSWORD https://mlflow.seismicsocal.duckdns.org/health    # -> OK
 ```
-The first pull recognises the checkpoints already on disk as v1 by their sha256, so nothing is
-reinstalled. Drift reports `insufficient` until a full day of features has been logged.
+**4. Daemon venv packages + the VM `.env`:**
+```bash
+VM$ /opt/seismicsocal/.venv/bin/pip install -q mlflow-skinny evidently==0.7.23
+VM$ printf 'MLFLOW_TRACKING_URI=http://127.0.0.1:5000\nOPS_EMAIL_TO=you@example.com\nQUAKEOPS_AUTO_DEPLOY=0\n' >> /opt/seismicsocal/.env
+```
+**5. The PC `.env`** (append these lines; `.env` is gitignored, never commit it):
+```
+MLFLOW_TRACKING_URI=https://mlflow.seismicsocal.duckdns.org
+MLFLOW_TRACKING_USERNAME=quakeops
+MLFLOW_TRACKING_PASSWORD=YOUR_PASSWORD
+```
+**6. Register today's models as v1 @champion.** This builds the drift reference on the GPU and uploads about 3 MB:
+```bash
+PC$ .venv/Scripts/python scripts/tracking.py register-legacy
+PC$ .venv/Scripts/python scripts/tracking.py status   # -> detector: champion v1 / magnitude: champion v1
+```
+**7. Daily job on the VM** (09:30 UTC: record the champion, then the drift check). Install it and run it once now:
+```bash
+VM$ cd /opt/seismicsocal && sudo cp deploy/seismicsocal-quakeops.{service,timer} /etc/systemd/system/
+VM$ sudo systemctl daemon-reload && sudo systemctl enable --now seismicsocal-quakeops.timer
+VM$ sudo systemctl start seismicsocal-quakeops.service; journalctl -u seismicsocal-quakeops -n 30 --no-pager
+```
+- **Expected output:** `installed missing sidecar drift_reference.csv`, then `deployed models are the current
+  champions`.
+- **If it says `v1 is @champion but vNone is deployed`:** the VM's checkpoints differ from the PC's; compare
+  their sha256 (§4).
+- **Drift:** reports `insufficient` until a full UTC day of live features exists.
+- **The daemon restarts itself once**, about 30 s later, because it noticed `models.json` appear. That's
+  expected.
+- **Check:** `/api/health` now lists both models, and `/health` on the site shows them.
 
-**6. Monthly retrain on the PC:** run `dagster dev -f scripts/quakeops_dagster.py` and switch the schedule
-on in the UI. When the UI isn't running, use Task Scheduler (with "run as soon as possible after a missed
-start" enabled):
+**8. Automatic deploys from GitHub** (optional). Create a dedicated key with no passphrase, authorise it on the
+VM, and add two repo secrets (GitHub → Settings → Secrets and variables → Actions):
+```bash
+PC$ ssh-keygen -t ed25519 -f ~/.ssh/seismic_ci -N "" -C seismic-ci
+PC$ cat ~/.ssh/seismic_ci.pub | ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169 'cat >> ~/.ssh/authorized_keys'
+#   secrets: VM_HOST = 167.234.214.169    VM_SSH_KEY = the whole contents of ~/.ssh/seismic_ci
+```
+From then on, every push to `main` runs lint, tests and the site build. If they pass, it deploys the code and
+site and restarts the service. Models still arrive only through the registry.
+
+**9. Monthly retrain on the PC:** run `dagster dev -f scripts/quakeops_dagster.py` and switch the schedule on in
+the UI. When the UI isn't running, use Task Scheduler (enable "run as soon as possible after a missed start"):
 ```
 schtasks /Create /TN QuakeOpsRetrain /SC MONTHLY /D 3 /ST 03:00 /TR "C:\Users\brady\desktop\coding\earthquake\.venv\Scripts\python.exe C:\Users\brady\desktop\coding\earthquake\scripts\retrain.py"
 ```
-**7. CI deploy:** create a dedicated ed25519 key with no passphrase and add its public half to
-`~ubuntu/.ssh/authorized_keys`. In GitHub repo secrets, set `VM_SSH_KEY` (the private key) and `VM_HOST`.
-Until those exist, CI only tests and builds.
+First run it by hand: `.venv/Scripts/python scripts/retrain.py --month 2026-09 --dry-run` (takes hours, moves
+nothing).
 
-**Applying a new champion by hand** (when `QUAKEOPS_AUTO_DEPLOY=0`): run `python scripts/tracking.py pull --apply`
-on the VM. It verifies the sha256, swaps the files in atomically, and the daemon restarts itself within
-30 s. To roll back, run `python scripts/retrain.py rollback --model detector --to N` on the PC, then
-`pull --apply` again.
+**Applying a new champion** (when `QUAKEOPS_AUTO_DEPLOY=0`): run `VM$ .venv/bin/python scripts/tracking.py pull --apply`.
+It verifies the sha256, swaps the files in atomically, and the daemon restarts itself within 30 s. To roll back,
+run `PC$ python scripts/retrain.py rollback --model detector --to N`, then `pull --apply` again.
