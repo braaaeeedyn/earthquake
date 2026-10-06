@@ -134,19 +134,11 @@ against USGS before alerts are switched on.
 ## 8. Design
 
 - **The live site:** a deliberately minimal, monochrome system (black ink, gray body text, filled-black pills,
-  12 px cards, light only). The chrome stays quiet so the evidence stands out.
-- **Explorations:** ten alternative homepage directions, reachable at `/home1`–`/home10`, all built from the
-  same real components and numbers:
-  - **1 · The sequence:** a story scroll that follows one quake through five steps;
-  - **2 · Seismogram:** a full-bleed annotated trace;
-  - **3 · Against the baseline:** CI range plots front and center;
-  - **4 · Map first:** coverage as the hero, for residents;
-  - **5 · Front page:** a broadsheet layout;
-  - **6 · The paper:** a research-paper layout;
-  - **7 · Instrument:** a light console with live station health;
-  - **8 · Questions:** an FAQ-led explainer;
-  - **9 · Drench:** committed clay color with poster type;
-  - **10 · 55 seconds:** a timeline from fault slip to confirmed alert.
+  12 px cards, light only) with serif (Literata) headings and a layout and type scale that grow with the
+  screen. The chrome stays quiet so the evidence stands out.
+- **Design process:** ten alternative homepage directions were prototyped on the real components and data,
+  from a story scroll to a research-paper layout. The original layout won; it adopted the explorations'
+  serif headings, fluid type and higher-contrast text.
 - **Accessibility:** WCAG AA contrast, status never shown by color alone, reduced-motion support for every
   animation, and no sideways scroll at 320 px.
 

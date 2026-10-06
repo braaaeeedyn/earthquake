@@ -160,13 +160,6 @@ export async function getHealth(): Promise<Health> {
   return (await res.json()) as Health
 }
 
-// Full live status: per-station up/latency from the daemon (refreshed every 30 s). Used by design drafts.
-export async function liveDetail(): Promise<{ live: boolean; stations?: Record<string, { up: boolean; latency_s: number | null }> }> {
-  const res = await fetch(api('/api/status'))
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return await res.json()
-}
-
 // The server's app-version policy: `latest` released and `min` allowed to run.
 export async function getAppVersion(): Promise<{ latest: string; min: string }> {
   const res = await fetch(api('/api/version'))

@@ -515,11 +515,8 @@ No location is stored.
   per station (outlined = ok, gray = watch, black = drifting, dashed = no data; each labelled in text),
   and the promotion history. Each part reads "hasn't reported yet" until its VM job has run (§12.0). The
   result cards also show their 95% CI under the headline number (from `seismic.json`; same deploy).
-- **Design drafts** (`/home1`–`/home10`, `app/src/drafts/`): ten alternative homepage layouts built from the
-  same components and numbers, with a floating switcher between them. They're a separate lazily-loaded chunk,
-  so the live homepage bundle is unchanged. Drafts 2, 7 and 9 try colors outside the locked monochrome palette
-  (exploration only). Design context lives in `PRODUCT.md` (audience, voice, principles) and `DESIGN.md`
-  (visual system).
+- **Design context:** `PRODUCT.md` (audience, voice, principles) and `DESIGN.md` (visual system: monochrome,
+  light only, Literata serif headings, fluid column and type scale).
 - **App version gate:** the app compares its version with `/api/version`. Behind `min` on major or
   minor means blocked, with a link to the `/app` download page. A patch gap is only a notice.
 

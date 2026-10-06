@@ -139,9 +139,8 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size carousel (reads `seismic.json`, evidence
   figures from `make_figures.py`), interactive coverage map (`Coverage.tsx`, `socal_cities.json`),
   biggest-quakes carousel with caught badges, "Alert me near me" (region-first, mobile app only),
-  `/health` model-health page (from `/api/health`), 95% CIs under the card numbers. Design drafts at
-  `/home1`–`/home10` (`app/src/drafts/`, lazy chunk, own CSS scoped `.dN`; drafts 2/7/9 use off-palette accents
-  as exploration). `PRODUCT.md` = audience/voice/principles for the impeccable skill; `PORTFOLIO.md` = portfolio write-up.
+  `/health` model-health page (from `/api/health`), 95% CIs under the card numbers. (Ten homepage drafts
+  were prototyped 2026-10-05 and removed 2026-10-06; the original layout was kept.) `PRODUCT.md` = audience/voice/principles for the impeccable skill; `PORTFOLIO.md` = portfolio write-up.
 - **QUAKEOPS (MLOps loop, HOW_IT_WORKS §12, design in `QUAKEOPS_IMPLEMENTATION.md`).** PC: MLflow-tracked
   training (`tracking.py`), monthly Dagster job (`quakeops_dagster.py` → `retrain.py`: data `--append` →
   train `--compare` champion → replay → gate → promote), CIs via `src/eq/stats.py`, `make_figures.py publish`.
@@ -204,7 +203,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
 Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH session needs the user).
 - **Running:** branch `release-2.00.00-quakeops` (v2 system, 19 stations — all up, two-stage alerts with the
-  per-device alert speed, /api/health, site redesign + CIs + drafts). Detection live since 2026-10-05 09:13 UTC.
+  per-device alert speed, /api/health, serif headings + fluid layout + CIs). Detection live since 2026-10-05 09:13 UTC.
 - **App 2.00.00 is a FORCED update** (server LATEST = MIN = 2.00.00; APK on /app built 2026-10-06). The APK is
   signed with the other device's debug key (different signature from 1.01.00), so updating = uninstall +
   reinstall; that wipes the app's stored subscription, so users must re-subscribe. Stale tokens are pruned

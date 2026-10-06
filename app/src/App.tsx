@@ -1,13 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { loadSeismic, type Seismic, type Task } from './seismic'
 import { caTop, geocode, getAppVersion, getHealth, getStations, liveStatus, sendContact, type Health, type ModelInfo, type Station, type UsgsEvent, type CaWindow } from './nearme'
 import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, subscribedName, subscribedMode, type AlertMode } from './push'
 import { getMyLocation } from './geo'
 import { APP_VERSION, mustUpdate, updateAvailable } from './version'
 import Coverage from './Coverage'
-
-// Design drafts (/home1../home10): a separate chunk, loaded only on those routes.
-const Drafts = lazy(() => import('./drafts/Drafts'))
 
 // The public site, for sending the app to the download/update page in an external browser.
 const APP_SITE = 'https://seismicsocal.duckdns.org'
@@ -18,7 +15,7 @@ type State =
   | { status: 'ready'; data: Seismic }
 
 // Detect -> Size is the live pipeline's order, so the numbering carries meaning.
-export const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
+const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
     desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 20 real days it caught about 8 in 10 quakes of M2 and up, with no false alerts.',
@@ -46,22 +43,19 @@ export const ROWS: { n: string; kicker: string; key: string; q: string; figure: 
 ]
 
 // Tiny pathname router: push a new path and re-render (no router dependency for a handful of pages).
-export function navigate(path: string) {
+function navigate(path: string) {
   window.history.pushState({}, '', path)
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
-type Route = 'home' | 'app' | 'privacy' | 'health' | 'draft' | 'notfound'
-const DRAFT_RE = /^\/home([1-9]|10)$/
+type Route = 'home' | 'app' | 'privacy' | 'health' | 'notfound'
 const ROUTE_OF = (p: string): Route =>
-  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : p === '/health' ? 'health'
-    : DRAFT_RE.test(p) ? 'draft' : 'notfound'
+  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : p === '/health' ? 'health' : 'notfound'
 const PAGE_TITLES: Record<Route, string> = {
   home: 'SeismicSoCal · Southern California earthquake ML',
   app: 'Get the app · SeismicSoCal',
   privacy: 'Privacy policy · SeismicSoCal',
   health: 'Model health · SeismicSoCal',
-  draft: 'Design draft · SeismicSoCal',
   notfound: 'Page not found · SeismicSoCal',
 }
 
@@ -113,14 +107,6 @@ export default function App() {
   if (gate?.blocked) return <UpdateRequired latest={gate.latest} />
 
   const softUpdate = gate && !gate.blocked && updateAvailable(APP_VERSION, gate.latest)
-
-  // Design drafts render their own full page (own nav/footer) around the same real components.
-  if (route === 'draft') {
-    const n = Number(DRAFT_RE.exec(path)![1])
-    return state.status === 'ready'
-      ? <Suspense fallback={<p className="state">Loading draft…</p>}><Drafts n={n} data={state.data} live={live} /></Suspense>
-      : <p className="state">{state.status === 'error' ? state.message : 'Loading…'}</p>
-  }
 
   return (
     <div className="app">
@@ -241,7 +227,7 @@ function ContactModal({ onClose }: { onClose: () => void }) {
 
 // Inline arrow - an SVG chevron that inherits the text color and centres cleanly (the unicode
 // ← / → glyphs sat off the text baseline). Flip horizontally for the left-pointing variant.
-export function Arrow({ dir = 'right' }: { dir?: 'left' | 'right' }) {
+function Arrow({ dir = 'right' }: { dir?: 'left' | 'right' }) {
   return (
     <svg className="ar" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"
       style={dir === 'left' ? { transform: 'scaleX(-1)' } : undefined}>
@@ -533,7 +519,7 @@ function Console({ data }: { data: Seismic }) {
 
 // The Detect -> Size sequence as an auto-cycling carousel.
 // Tracks the previous index so the outgoing card slides left and the incoming enters from the right.
-export function Carousel({ data }: { data: Seismic }) {
+function Carousel({ data }: { data: Seismic }) {
   const byKey = Object.fromEntries(data.tasks.map((t) => [t.key, t]))
   const rows = ROWS.filter((r) => byKey[r.key])
   const n = rows.length
@@ -658,7 +644,7 @@ function Result({
 
 // Disclosure whose panel grows smoothly (grid-rows 0fr -> 1fr) instead of snapping open.
 // Open state is shared across all three cards (controlled by the parent).
-export function Evidence({
+function Evidence({
   figure,
   kicker,
   tech,
@@ -693,7 +679,7 @@ export function Evidence({
 
 // A synthetic seismograph that shakes in place - stationary, but the closer the mouse, the
 // larger and more erratic the amplitude; calm and near-flat when the mouse is far away.
-export function Trace() {
+function Trace() {
   const svgRef = useRef<SVGSVGElement>(null)
   const pathRef = useRef<SVGPathElement>(null)
   const target = useRef(0) // proximity target from the mouse, 0 (far) .. 1 (over the trace)
@@ -836,7 +822,7 @@ const CA_WINDOWS = [
 ]
 
 // The biggest California quakes across widening time windows, cycled like the model cards.
-export function CaLargest() {
+function CaLargest() {
   const n = CA_WINDOWS.length
   const CYCLE = 7
   const [idx, setIdx] = useState<{ active: number; prev: number; dir: 'next' | 'prev' }>({ active: 0, prev: 0, dir: 'next' })
@@ -970,7 +956,7 @@ function sameSet(a: Set<string>, b: Set<string>) {
   return a.size === b.size && [...a].every((x) => b.has(x))
 }
 
-export function NearMe() {
+function NearMe() {
   // Restore the persisted subscription so the choice survives closing the app: the stations the
   // device is subscribed to are shown pre-selected (and locked-in), not blank.
   const savedSubs = subscribedStations()
