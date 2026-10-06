@@ -573,7 +573,7 @@ python scripts/replay_archive.py calibrate --start 2026-09-29,2020-09-07 --end 2
 python scripts/replay_archive.py run --start 2026-10-02,2026-08-18 --end 2026-10-05,2026-08-25 --tag test
 python scripts/replay_archive.py events
 python scripts/make_figures.py                        # site figures + publish metrics/CIs to seismic.json
-python scripts/live_watch.py --selftest && pytest     # logic checks (25 tests)
+python scripts/live_watch.py --selftest && pytest     # logic checks (26 tests)
 python scripts/tracking.py register-legacy            # QuakeOps: current models -> registry v1 @champion
 cd app && npm run build                               # site
 ```

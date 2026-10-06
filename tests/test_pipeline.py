@@ -149,3 +149,21 @@ def test_drift_features_are_scale_free():
     a, b = window_features(det_prep(w)), window_features(det_prep(w * 1e6))
     assert np.allclose(a[0], b[0], atol=1e-6) and np.allclose(a[1], b[1], atol=1e-6)
     assert 0 < a[1][0] < 1
+
+
+def test_sizing_waits_for_picking_stations_beyond_the_size_radius():
+    """Regression (80-day replay): a picking station > size_radius_km from an edge-of-network location used to
+    raise KeyError in size_ready, which would block every later event's sizing."""
+    class Mag:
+        def predict(self, X, mask, d):
+            return 3.0, 0.1
+    p = Pipeline(None, Mag(), network.COORDS, network.CODES, Src(), Config(size_radius_km=50.0), early=None)
+    _picks(p, 34.1, -117.4, 0.0, 4)
+    p.associate(40.0)
+    ev = p.events[-1]
+    d = locate.haversine_km(ev.lat, ev.lon, network.COORDS[:, 0], network.COORDS[:, 1])
+    assert max(d[i] for i in ev.stations) > 50.0          # at least one picking station is outside the radius
+    p.size_ready(41.0)                                    # must not raise; too early to size
+    assert p.pending == [ev]
+    p.size_ready(500.0)                                   # past the wait: sized with what's available
+    assert not p.pending

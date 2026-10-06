@@ -304,7 +304,10 @@ class Pipeline:
         for ev in list(self.pending):
             d = locate.haversine_km(ev.lat, ev.lon, self.coords[:, 0], self.coords[:, 1])
             near = np.flatnonzero(d <= self.cfg.size_radius_km)
-            p_at = {i: ev.picks.get(self.codes[i], ev.t0 + float(locate.travel_time(d[i]))) for i in near}
+            # P time per station: its pick, else the located travel time. Picking stations are always included --
+            # an edge-of-network location can leave one beyond size_radius_km, and the timing below needs it.
+            p_at = {i: ev.picks.get(self.codes[i], ev.t0 + float(locate.travel_time(d[i])))
+                    for i in set(near.tolist()) | set(ev.stations)}
             need = sorted(ev.stations, key=lambda i: d[i])[:self.cfg.min_stations]
             ideal = max(p_at[i] for i in need) + 25.0 + ZNE_POST_S
             if now < ideal:

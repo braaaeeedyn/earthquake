@@ -171,7 +171,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Train:** `python scripts/demo_detect.py --retrain --seeds 5`, `python scripts/demo_magnitude.py --retrain --seeds 5`
   (CUDA torch is in `.venv`; RTX 4060).
 - **Replay / acceptance:** `python scripts/replay_archive.py scan|calibrate|run|events|compare-live` (see docstring).
-- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (25 tests); `ruff check scripts src tests`.
+- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (26 tests); `ruff check scripts src tests`.
 - **QuakeOps:** `python scripts/retrain.py --month YYYY-MM [--stage S] [--dry-run]`;
   `dagster dev -f scripts/quakeops_dagster.py`; `python scripts/tracking.py register-legacy|pull|status`;
   `python scripts/drift_check.py [--build-reference]`. Needs `MLFLOW_TRACKING_URI` (+ basic-auth user/pass) in `.env`.
