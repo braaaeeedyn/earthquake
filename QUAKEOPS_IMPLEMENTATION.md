@@ -46,20 +46,18 @@ of every step:
 
 | Where | When |
 |---|---|
-| 95% CIs under the Detect / Size numbers on the site, `/health` link in the footer | after the next site deploy (tar deploy, or CI once the secrets exist) |
-| `/health` → "Live models" and "Promotion history" | after the VM's MLflow server is set up, `register-legacy` has run from the PC, and the QuakeOps timer has run once |
-| `/health` → drift pills | the day after the new `live_watch.py` is deployed and the timer is on (it needs a full day of features) |
+| 95% CIs under the Detect / Size numbers on the site, `/health` link in the footer | live (2026-10-06) |
+| `/health` → "Live models" and "Promotion history" | live: detector v1 and magnitude v1 |
+| `/health` → drift pills | from the 2026-10-07 daily run (it needs a full UTC day of features) |
 | A new model on the site | after the first retrain passes the gate (`retrain.py --month 2026-09`) and you install it |
-| Android app | the APK is web-build based. 1.01.00 has none of this; it arrives with the next APK build |
-| MLflow UI | `https://mlflow.seismicsocal.duckdns.org` once step 2 of DEPLOY.md "QuakeOps" is done |
+| Android app | 2.00.00 (forced update), with the alert-speed choice |
+| MLflow UI | `https://mlflow.seismicsocal.duckdns.org` (user `quakeops`) |
 
 **What needs retraining or testing:** nothing needs retraining now. The live checkpoints are unchanged and
-are the v1 champions; this work only re-evaluated them, with CIs. Still untested end to end, in order:
-1. VM setup + `register-legacy` + one `tracking.py pull` (the step not yet run against a live server);
-2. a site deploy, then open `/health`;
-3. one real `retrain.py --month 2026-09` (hours: the month's download, two trainings, and a re-scan of
-   the 10 replay days with the challenger detector), starting with `--dry-run` so no alias moves;
-4. a first push to GitHub, to see CI run.
+are the v1 champions; this work only re-evaluated them, with CIs. The server side is set up and verified
+(2026-10-06). Still to run: one real `retrain.py --month 2026-09` (hours: the month's download, two
+trainings, and a re-scan of the 10 replay days with the challenger detector), starting with `--dry-run` so no
+alias moves, then the monthly schedule.
 
 **False positives during training: yes, at three levels:**
 - *per window* (`demo_detect.py`, every training run): false-trigger rate on test noise and on held-out

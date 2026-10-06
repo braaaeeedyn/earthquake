@@ -16,7 +16,7 @@ nearby subscribers. **Deployed live at https://seismicsocal.duckdns.org.**
 The project began as near-term earthquake *forecasting* from geomagnetic (INTERMAGNET) data. On
 real data that thesis came up **null** (superposed-epoch p=0.83, ROC ≈ chance) — exactly as the
 literature predicts. That track is retired as a rigorous replication/null result, and the geomagnetic
-pipeline was later removed — `src/eq/` now holds only the seismic catalog/waveform helpers. Work
+pipeline was later removed — `src/eq/` is the live library: station network, catalogue, waveform access, picker/locator, models, pipeline and stats. Work
 pivoted to **seismic-waveform deep learning**, where the same CNN/GNN/Transformer architecture
 genuinely works.
 

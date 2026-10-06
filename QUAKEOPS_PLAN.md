@@ -13,8 +13,8 @@ See [the overlap plan](#overlap-plan-with-transitpulse).
 
 ---
 
-> **Status 2026-10-05:** `[x]` = built and tested on the PC (not yet deployed); `[ ]` = a VM step for you
-> (DEPLOY.md "QuakeOps"). Summary and "when will I see it": top of `QUAKEOPS_IMPLEMENTATION.md`.
+> **Status 2026-10-06:** everything checked below is built and live (MLflow on the VM, v1 champions registered,
+> daily pull + drift job, `/health`, CI deploys on `main`). Not yet run: the first real monthly retrain. Summary and "when will I see it": top of `QUAKEOPS_IMPLEMENTATION.md`.
 
 ## 1. What it does
 
@@ -94,7 +94,7 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
 - [x] Record the current v2 models' metrics (detection AUC 0.9998 / MCC 0.886, magnitude R² 0.951 / MAE 0.098), with bootstrap CIs, as the **v1 champions**.
 
 ### Phase 1: MLflow (week 1) · gap #12
-- [ ] **(VM step, yours)** Install the MLflow server on the VM:
+- [x] Install the MLflow server on the VM:
   - systemd unit `mlflow.service`
   - `--backend-store-uri sqlite:////opt/mlflow/mlflow.db --artifacts-destination /opt/mlflow/artifacts`
   - Caddy reverse proxy with `basic_auth`
@@ -102,7 +102,7 @@ Everything else (live detection, sizing, push alerts, biggest-quakes browser, An
   - **params:** architecture, learning rate, epochs, seed, dataset hash, git commit
   - **metrics:** AUC, MCC, R², MAE, each against its baseline
   - **artifacts:** `.pt` files, figures, `seismic.json`
-- [ ] **(VM step, yours)** Register the existing checkpoints as version 1 of `detector` and `magnitude`; set alias `champion`. (EEW is gone; `SCALE` is gone: checkpoints carry their normalizers.)
+- [x] Register the existing checkpoints as version 1 of `detector` and `magnitude`; set alias `champion`. (EEW is gone; `SCALE` is gone: checkpoints carry their normalizers.)
 - [x] A daily `tracking.py pull` on the VM downloads `@champion` (sha256-verified) and writes `models.json`; the daemon restarts itself when the version changes.
 - ✅ **Checkpoint:** every model on the live site is traceable to its run.
 

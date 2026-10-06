@@ -36,8 +36,8 @@ the same code that runs on the server.
 **QuakeOps** (§12) wraps this in an MLOps loop: training runs are tracked in MLflow, models are versioned
 in its registry (`champion` / `challenger`), a monthly Dagster job on the PC grows the dataset, retrains,
 and promotes a challenger only through a statistical + replay gate, and a daily job on the VM records the
-champion (installing it only when allowed) and checks the live stream for drift. **Status (2026-10-05):
-the code is in the repo and tested on the PC; none of it runs on the VM or the live site yet** (§12.0).
+champion (installing it only when allowed) and checks the live stream for drift. **Live since 2026-10-06**
+(§12.0).
 
 ---
 
@@ -509,11 +509,11 @@ No location is stored.
   - registering sends the chosen station codes and the push token.
 - **Biggest Southern California quakes:** Day / Week / Month / Year / All time from `/api/ca`, each
   with its caught / seen / not-caught mark.
-- **Model health** (`/health`, footer link; **in the code, not on the live site until the next deploy**):
+- **Model health** (`/health`, footer link):
   the live Detect and Size versions with held-out metrics ± 95% CI against their baselines, a drift pill
   per station (outlined = ok, gray = watch, black = drifting, dashed = no data; each labelled in text),
-  and the promotion history. Each part reads "hasn't reported yet" until its VM job has run (§12.0). The
-  result cards also show their 95% CI under the headline number (from `seismic.json`; same deploy).
+  and the promotion history (each part reads "hasn't reported yet" if its VM job hasn't run). The result
+  cards also show their 95% CI under the headline number (from `seismic.json`).
 - **Design context:** `PRODUCT.md` (audience, voice, principles) and `DESIGN.md` (visual system: monochrome,
   light only, Literata serif headings, fluid column and type scale).
 - **App version gate:** the app compares its version with `/api/version`. Behind `min` on major or
@@ -531,7 +531,7 @@ No location is stored.
   since go-live and writes `data/processed/crosscheck_report.json`, split into **confirmed** (can
   alert), **pushed** and **tentative** (logged only), each with a +1 h chance baseline. Each USGS quake in
   the "Biggest quakes" list is also checked live, at request time (§7).
-- **QuakeOps units (in `deploy/`, NOT installed yet; DEPLOY.md "QuakeOps"):**
+- **QuakeOps units** (installed 2026-10-06; setup steps in DEPLOY.md "QuakeOps"):
 - **`seismicsocal-quakeops.timer`** (09:30 UTC) runs `tracking.py pull` (resolves the registry
   champion, writes `models.json`, and installs a new champion only if `QUAKEOPS_AUTO_DEPLOY=1`), then
   `drift_check.py` (§12).
@@ -573,7 +573,7 @@ python scripts/replay_archive.py calibrate --start 2026-09-29,2020-09-07 --end 2
 python scripts/replay_archive.py run --start 2026-10-02,2026-08-18 --end 2026-10-05,2026-08-25 --tag test
 python scripts/replay_archive.py events
 python scripts/make_figures.py                        # site figures + publish metrics/CIs to seismic.json
-python scripts/live_watch.py --selftest && pytest     # logic checks (24 tests)
+python scripts/live_watch.py --selftest && pytest     # logic checks (25 tests)
 python scripts/tracking.py register-legacy            # QuakeOps: current models -> registry v1 @champion
 cd app && npm run build                               # site
 ```
@@ -598,17 +598,17 @@ cd app && npm run build                               # site
 
 The design and its decisions are in `QUAKEOPS_IMPLEMENTATION.md`. This section describes how it runs.
 
-### 12.0 Status (2026-10-05)
+### 12.0 Status (2026-10-06)
 
 | Part | State |
 |---|---|
-| CIs, paired comparisons, seed-averaged write-up, `seismic.json` CIs | done on the PC (numbers in §4) |
-| `retrain.py` gate, Dagster job, `build_dataset.py --append`, replay `--det/--mag` | in the repo. Gate checked on a dry run (champion vs itself); the append selection checked to reproduce today's lists. **No end-to-end retrain run yet** |
-| MLflow tracking + `register-legacy` | checked against a throwaway local server. **No MLflow server on the VM yet** |
-| `tracking.py pull`, the daemon's restart on a new version | in the repo, **untested against a live server** |
-| Drift features (`live_watch.py`) + `drift_check.py` | checked on synthetic days. **Features start logging once the new `live_watch.py` is deployed** |
-| `/health` page, `/api/health`, CIs on the cards | built (`npm run build`). **Not on the site until the next deploy** |
-| CI (`.github/workflows/ci.yml`) | runs on the first push to GitHub. The deploy step waits for the `VM_HOST` / `VM_SSH_KEY` secrets |
+| CIs, paired comparisons, seed-averaged write-up, `seismic.json` CIs | live (numbers in §4) |
+| MLflow registry on the VM (`https://mlflow.seismicsocal.duckdns.org`, basic auth) | live; detector and magnitude registered as v1 `@champion` |
+| Daily job: `tracking.py pull` + `drift_check.py` (09:30 UTC) | live; `/health` shows both models deployed and loaded by the daemon |
+| Drift features (`live_watch.py`) | logging since 2026-10-06; the first full-day drift statuses come from the 2026-10-07 run |
+| `/health` page, `/api/health`, CIs on the cards | live |
+| CI (`.github/workflows/ci.yml`) | lint, tests, selftest and build on every push and PR; pushes to `main` deploy to the VM |
+| `retrain.py` gate, Dagster job, `build_dataset.py --append`, replay `--det/--mag` | in the repo; the gate was checked on a dry run (champion vs itself). **No end-to-end retrain run yet** |
 
 ### 12.1 Tracking and registry — `scripts/tracking.py`
 
@@ -620,9 +620,10 @@ The design and its decisions are in `QUAKEOPS_IMPLEMENTATION.md`. This section d
 - **Registered models:** `detector` (with sidecar `drift_reference.csv`) and `magnitude` (with
   `early_mag.json` and `tt_correction.json`, which are fitted from the same dataset). Each version is
   tagged with its checkpoint sha256. Aliases are `champion` and `challenger`.
-- `register-legacy` registers the models that went live on 2026-10-05 as v1 `@champion`. It has been
-  checked against a local test server, including that a second run doesn't duplicate anything. It has
-  not yet been run against the VM registry.
+- `register-legacy` registered the models that went live on 2026-10-05 as v1 `@champion` (run
+  2026-10-06; a second run doesn't duplicate anything).
+- **First pull:** the files already on disk are recognised as v1 by their sha256, so nothing is reinstalled;
+  any missing sidecar (the drift reference on a fresh VM) is installed.
 - **`pull`** (VM, daily) writes `data/processed/models.json` (versions, metrics, lineage, promotion
   history). With `--apply`, or `QUAKEOPS_AUTO_DEPLOY=1`, it also downloads a new champion, verifies its
   sha256, and swaps it in atomically at the live paths. `live_watch.py` sees the new `deployed` version

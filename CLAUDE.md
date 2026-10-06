@@ -76,8 +76,7 @@ official warning system. Full method: `HOW_IT_WORKS.md`.
 
 _History: the project began as near-term (7-day) earthquake **forecasting** from geomagnetic (INTERMAGNET)
 data. On real data that thesis came up **null** — superposed-epoch p=0.83, ROC ≈ chance, as the literature
-predicts — and the geomagnetic pipeline was later **removed** (`src/eq/` now holds only the seismic
-catalog/waveform helpers). Work pivoted to seismic-waveform deep learning, where the same
+predicts — and the geomagnetic pipeline was later **removed** (`src/eq/` is the live library: station network, catalogue, waveform access, picker/locator, models, pipeline and stats). Work pivoted to seismic-waveform deep learning, where the same
 CNN/GNN/Transformer architecture genuinely works._
 
 ### The models
@@ -172,7 +171,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Train:** `python scripts/demo_detect.py --retrain --seeds 5`, `python scripts/demo_magnitude.py --retrain --seeds 5`
   (CUDA torch is in `.venv`; RTX 4060).
 - **Replay / acceptance:** `python scripts/replay_archive.py scan|calibrate|run|events|compare-live` (see docstring).
-- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (24 tests); `ruff check scripts src tests`.
+- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (25 tests); `ruff check scripts src tests`.
 - **QuakeOps:** `python scripts/retrain.py --month YYYY-MM [--stage S] [--dry-run]`;
   `dagster dev -f scripts/quakeops_dagster.py`; `python scripts/tracking.py register-legacy|pull|status`;
   `python scripts/drift_check.py [--build-reference]`. Needs `MLFLOW_TRACKING_URI` (+ basic-auth user/pass) in `.env`.
@@ -203,7 +202,7 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 ### Deployed (status as of 2026-10-06)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
 Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH session needs the user).
-- **Running:** branch `release-2.00.00-quakeops` (v2 system, 19 stations — all up, two-stage alerts with the
+- **Running:** `main` (deployed by CI on every push; v2 system, 19 stations — all up, two-stage alerts with the
   per-device alert speed, /api/health, serif headings + fluid layout + CIs). Detection live since 2026-10-05 09:13 UTC.
 - **App 2.00.00 is a FORCED update** (server LATEST = MIN = 2.00.00; APK on /app built 2026-10-06). The APK is
   signed with the other device's debug key (different signature from 1.01.00), so updating = uninstall +
@@ -212,7 +211,10 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Both alert-speed profiles running** (`early_mag_T2.json` copied 2026-10-06; daemon log: `alert-speed profiles: ['fast', 'standard']`).
 - **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
-- **QuakeOps not set up on the VM** (no MLflow / quakeops timer / GitHub secrets): /health shows "hasn't reported".
+- **QuakeOps live on the VM (2026-10-06):** `mlflow.service` (registry, `https://mlflow.seismicsocal.duckdns.org`,
+  basic auth user `quakeops`); detector + magnitude registered as v1 `@champion`; `seismicsocal-quakeops.timer`
+  (09:30 UTC) pulls the champion (`QUAKEOPS_AUTO_DEPLOY=0`) and runs the drift check; `/health` shows both models.
+  GitHub secrets `VM_HOST` / `VM_SSH_KEY` set (key `~/.ssh/seismic_ci`, no passphrase): pushes to `main` deploy.
 - Deploy = one SSH session streaming a tar (git archive + app/dist + data/processed/v2/*.json); verify
   checkpoint sha256 on the VM (DEPLOY.md).
 
@@ -222,11 +224,7 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   ~7 confirmed/day — if live stays far below that, replay the same hours and compare.
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
-- **QuakeOps go-live (code done 2026-10-05, nothing on the VM yet; DEPLOY.md "QuakeOps"):** user steps =
-  MLflow venv + `mlflow.service` + Caddy block (hash) on the VM; `.env` keys on PC and VM; `pip install
-  mlflow-skinny evidently==0.7.23` in the VM venv; deploy the code; `tracking.py register-legacy` from the PC;
-  enable `seismicsocal-quakeops.timer`; GitHub secrets `VM_HOST`, `VM_SSH_KEY` (dedicated key, no passphrase).
-  `tracking.py pull` is untested against a live server (the local test server was reaped for RAM after
-  register-legacy succeeded). First retrain: `retrain.py --month 2026-09` (~hours: fetch + 2 trainings + re-scan
-  of 10 replay days).
+- **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
+  10 replay days), then schedule monthly (Dagster schedule or the Task Scheduler entry in DEPLOY.md step 9).
+- **Shaking calibration** (`calibrate_shaking.py`) still fits on the v1 dataset; re-fit on v2 when convenient.
 - Drift reference has only ~280–650 training noise windows per station; if `watch` flaps, grow `NOISE_TIMES`.
