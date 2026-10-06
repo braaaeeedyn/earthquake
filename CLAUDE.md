@@ -198,6 +198,9 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   the real defaults are 30 s / 60 km.
 - MLflow prints emoji; `tracking.run` makes stdout tolerant (a cp1252 console used to crash at run end).
 - Low RAM: a local `mlflow server` + training at the same time can get reaped.
+- Deploys (tar) never delete files: CI removes server files git no longer tracks under scripts/src/tests before
+  restarting; do the same by hand (DEPLOY.md QuakeOps preamble). A stale `src/eq/models/` package once shadowed
+  `src/eq/models.py` and crash-looped the daemon for ~2 min (2026-10-06).
 
 ### Deployed (status as of 2026-10-06)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,

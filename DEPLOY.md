@@ -174,6 +174,13 @@ How it works: HOW_IT_WORKS.md §12. This is a one-time setup, done in this order
 - `PC$` = Git Bash on the Windows PC at the repo root;
 - `VM$` = an SSH session on the VM (`ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169`).
 
+**Deploys never delete files.** A `git archive` tar only adds and overwrites, so when code is renamed or
+removed, delete what git no longer tracks, or an old file can shadow the new one. On 2026-10-06 a leftover
+`src/eq/models/` package broke `from eq.models import ...`. CI does this automatically; for a manual deploy run:
+```bash
+PC$ git ls-files scripts src tests | ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169 'cd /opt/seismicsocal && sort > /tmp/t && find scripts src tests -type f -not -path "*/__pycache__/*" | sort | comm -23 - /tmp/t | xargs -r rm -f'
+```
+
 **1. Ship the current code** (no restart needed yet):
 ```bash
 PC$ git archive HEAD | ssh -i ~/.ssh/oracle_seismic ubuntu@167.234.214.169 'tar -x -C /opt/seismicsocal'

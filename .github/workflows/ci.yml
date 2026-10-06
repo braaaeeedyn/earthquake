@@ -68,5 +68,11 @@ jobs:
           SSH="ssh -i ~/key -o StrictHostKeyChecking=accept-new ubuntu@$HOST"
           # the APK under app/dist is gitignored and not rebuilt here: keep the VM's copy
           git archive HEAD | $SSH 'tar x -C /opt/seismicsocal'
+          # tar only adds/overwrites: delete code files git no longer has, or a renamed module's old copy can
+          # shadow the new one (2026-10-06: a stale src/eq/models/ package broke `from eq.models import ...`)
+          git ls-files scripts src tests | $SSH 'cd /opt/seismicsocal && sort > /tmp/tracked.txt &&
+            find scripts src tests -type f -not -path "*/__pycache__/*" | sort | comm -23 - /tmp/tracked.txt |
+            tee /dev/stderr | xargs -r rm -f && find scripts src tests -type d -empty -delete;
+            find scripts src tests -name __pycache__ -type d -exec rm -rf {} +'
           tar c --exclude='*.apk' -C app dist | $SSH 'tar x -C /opt/seismicsocal/app'
           $SSH 'sudo systemctl restart seismicsocal && sleep 8 && curl -fsS 127.0.0.1:8000/api/status'
