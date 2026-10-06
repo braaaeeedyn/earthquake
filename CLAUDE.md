@@ -200,17 +200,21 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - MLflow prints emoji; `tracking.run` makes stdout tolerant (a cp1252 console used to crash at run end).
 - Low RAM: a local `mlflow server` + training at the same time can get reaped.
 
-### Deployed (status as of 2026-10-05)
+### Deployed (status as of 2026-10-06)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
 Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH session needs the user).
-- **Running:** v2 system (19-station network, retrained models, located 3-station confirmation, two-stage
-  pushes with the 4 s quick check), all 19 stations up. Live since **2026-10-05 09:13 UTC**.
+- **Running:** branch `release-2.00.00-quakeops` (v2 system, 19 stations — all up, two-stage alerts with the
+  per-device alert speed, /api/health, site redesign + CIs + drafts). Detection live since 2026-10-05 09:13 UTC.
+- **App 2.00.00 is a FORCED update** (server LATEST = MIN = 2.00.00; APK on /app built 2026-10-06). The APK is
+  signed with the other device's debug key (different signature from 1.01.00), so updating = uninstall +
+  reinstall; that wipes the app's stored subscription, so users must re-subscribe. Stale tokens are pruned
+  automatically when FCM answers UNREGISTERED on the next push.
+- **`early_mag_T2.json` is NOT on the VM yet** (it is on the Windows PC, `data/processed/v2/`). Until it is
+  copied, only the standard profile runs: fast subscribers get no provisional push (they still get the
+  confirmation). Copy it before setting PUSH_ENABLED=1.
 - **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
-- **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`
-  (confirmed / pushed / tentative, each with a chance baseline). First ~2.5 h: 0 confirmed, 24 tentative.
-- **Website** is current (Detect/Size cards, coverage map, region picker, caught badges). The **APK** on
-  `/app` is still 1.01.00 (old UI; push replacement already works with it). Version gate at 1.01.00.
-- 1 subscription (migrated to the new stations). Pre-v2 log kept as `events_v1_until_2026-10-05.jsonl`.
+- **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
+- **QuakeOps not set up on the VM** (no MLflow / quakeops timer / GitHub secrets): /health shows "hasn't reported".
 - Deploy = one SSH session streaming a tar (git archive + app/dist + data/processed/v2/*.json); verify
   checkpoint sha256 on the VM (DEPLOY.md).
 
@@ -218,13 +222,6 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Shadow mode → pushes (~2026-10-12):** read the nightly report; if `confirmed` precision is well above
   its chance baseline and pushed magnitudes match USGS, set `PUSH_ENABLED=1` and restart. Replay predicts
   ~7 confirmed/day — if live stays far below that, replay the same hours and compare.
-- **APK 2.00.00 (user, on the other device — it has the Android project + `google-services.json`):** branch
-  `release-2.00.00-quakeops` already has the version bump merged (app/src/version.ts and server.py LATEST/MIN =
-  2.00.00, i.e. a FORCED update) plus the alert-speed picker. Check out that branch, set versionName "2.00.00" /
-  versionCode (+1) in app/android/app/build.gradle, run `VITE_API_BASE=https://seismicsocal.duckdns.org bash
-  scripts/build_apk.sh`, then deploy server.py + dist + APK (+ early_mag_T2.json) TOGETHER — a server at MIN 2.00.00
-  without the new APK on /app would lock every 1.01.00 user out. This PC's `app/android` is a stale template without
-  Firebase config — don't ship from it.
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **QuakeOps go-live (code done 2026-10-05, nothing on the VM yet; DEPLOY.md "QuakeOps"):** user steps =
