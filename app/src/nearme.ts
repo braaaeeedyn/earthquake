@@ -9,7 +9,7 @@ const API_BASE = Capacitor.isNativePlatform()
   ? ((import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://10.0.2.2:8000')
   : ''
 
-const api = (path: string) => API_BASE + path
+export const api = (path: string) => API_BASE + path
 
 export interface UsgsEvent {
   id: string
@@ -42,7 +42,7 @@ export async function getStations(): Promise<Station[]> {
 }
 
 // Register this device's FCM token + the station codes it subscribes to (no coordinates stored).
-export async function registerPushToken(p: { token: string; stations: string[]; name: string; mode: 'standard' | 'fast' }) {
+export async function registerPushToken(p: { token: string; stations: string[]; name: string; mode: 'standard' | 'fast'; caps: string[] }) {
   const res = await fetch(api('/api/register-push'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -70,19 +70,23 @@ On the full validation set 4 stations confirmed 31 events vs 86 and missed a rea
 
 Runs the exact live engine over **archived continuous data** (SCEDC), so the live behaviour is measured
 offline. Thresholds were chosen on 10 validation days (Sep 29 – Oct 2 2026 + Sep 7–14 2020) and scored
-once on held-out days:
+once on held-out days.
 
-| 10 held-out days (Oct 2–5 + Aug 18–25 2026) | new pipeline |
+**80 held-out days** (Apr 2022 – Aug 2026: 60 with an M3+ quake in coverage + 20 random; `replay/bigtest/`):
+
+| | result |
 |---|---|
-| confirmed events that are real catalogued quakes | **93 %** (chance baseline 0 %) |
-| false confirmations (logged, never pushed) | 3.5 / week |
-| pushes / false pushes | 5 / **0** — sized 3.63, 3.10, 3.39, 4.09, 3.49 vs catalog 3.6, 3.0, 3.3, 4.0, 3.5 |
-| location error (median) | **2.5 km** |
-| in-coverage M3+ caught | 4 / 5 (the miss came 80 s after an M4.0 at the same spot — coda suppression) |
+| pushes | **145**, all real quakes; 133 (92 %) matched a catalogued M2.5+ within 60 km, 12 were out-of-network quakes located 63–145 km off (chance baseline 0 %) |
+| pushed size vs catalog | bias +0.05, MAE 0.12, 89 % within 0.3 |
+| confirmed events that are real | 86 % busy days / 79 % random days (chance 4 % / 0 %); 7.4 false confirmations/week, logged only |
+| location error (median) | 3.0–3.6 km |
+| catch rate | M3+ **68 %** (CI 60–74 %), 78 % with ≥3 stations up and outside aftershock echo windows; M2+ 52 % |
+| first message / confirmation | Standard ~31 s, Fast ~25 s / ~50 s after origin |
 
-On the same Oct 2–5 days the **old** daemon pushed 6 alerts, **all false**, with a 37 km station-proxy
-location error. Event-centric test on 616 held-out events (live geometry): magnitude bias **+0.06**,
-MAE 0.12 (the old live path read **≈2.2 units low**), median location error 4.3 km.
+The first 10-day check (Oct 2–5 + Aug 18–25 2026: 93 % real, 5 pushes / 0 false, 4 of 5 M3+ caught) was too
+small to quote. On Oct 2–5 the **old** daemon pushed 6 alerts, **all false**, with a 37 km station-proxy
+location error. Event-centric test on 833 held-out events (live geometry): magnitude bias **+0.08**,
+MAE 0.135, median location error 3.8 km.
 
 ```bash
 .venv/Scripts/python scripts/replay_archive.py scan --start 2026-10-02 --end 2026-10-05   # score windows (cached)
@@ -100,11 +104,18 @@ React + Vite. `npm run dev`, opens on `localhost:5173`.
 - **Where it can see** — interactive coverage map (zoom/pan; more cities and dotted city boundaries as you
   zoom in) of the 19 stations and where 3+ / 2 stations cover.
 - **Biggest Southern California quakes** — a second carousel cycling Day / Week / Month / Year /
-  All time, live from the USGS FDSN catalog, each row linking to its `sms-tsunami-warning.com` page.
+  All time, live from the USGS FDSN catalog, each with its caught mark; each row opens a quake page with the
+  **estimated shaking at your home** (MMI, computed on the device; see below).
 - **Alert me near me** — follow a **region** (all its sensors), then turn single sensors off (city/state
   or "use my location" selects the nearest region). No coordinates
   are stored — only the chosen station codes + your device's push token. Push alerts are **mobile-app
   only**; the daemon does the alerting when a station you follow triggers.
+
+**Shaking at your home (MMI).** Setting your location in Alert me near me also saves it, on the device only,
+as your home. For every quake (past, or the one just pushed) the app estimates the Modified Mercalli intensity
+there from magnitude, distance and ground type (USGS Vs30), plus — for live quakes — how hard the quake shook our
+sensors. Checked on held-out USGS "Did You Feel It?" reports: MAE 0.42 levels, 94 % within one level (28 quakes,
+1,892 cells). APK 2.01.00 adds native code that puts it in the notification itself. Details: HOW_IT_WORKS §13.
 
 Run the full stack:
 
@@ -177,6 +188,7 @@ src/eq/
   seismic.py       # SCEDC waveform access (response removal, 18 Hz common low-pass, compact cache)
   catalog.py       # USGS catalog (monthly chunks, auto-split, date-ranged cache)
   stats.py         # bootstrap / cluster / paired bootstrap CIs, seed t-CI
+  shaking.py       # estimated shaking (MMI) at a place: equation, site + event terms, DYFI offset
 scripts/
   build_dataset.py      # v2 datasets on the live network (check / select / fetch / assemble)
   demo_detect.py / demo_magnitude.py   # train + evaluate (95% CIs, --compare a champion)
@@ -187,8 +199,9 @@ scripts/
   select_network.py     # reproduce the station selection (streamable, quiet, spaced, coverage)
   crosscheck_events.py  # score the live log vs USGS, with a time-shifted chance baseline
   server.py             # API + supervisor of live_watch.py
-  push_fcm.py / shaking_model.py / mailer.py   # FCM pushes / shaking wording / .env + operator email
-  calibrate_shaking.py  # fits shaking_calibration.json (the shaking model's coefficients)
+  push_fcm.py / mailer.py   # FCM pushes (normal or data-only) / .env + operator email
+  calibrate_shaking.py  # fits shaking_calibration.json (ground-motion equation + Vs30 site term)
+  validate_mmi.py       # scores the MMI estimate vs USGS Did You Feel It?, fits the DYFI offset
   build_apk.sh          # Android APK from the web build
 app/                    # React + Vite + Capacitor console (web + Android)
 tests/                  # pytest: network, picker/locator, pipeline rules, overfit-one-batch models

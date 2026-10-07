@@ -40,8 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
-import shaking_model  # noqa: E402
-from eq import locate, network, seismic  # noqa: E402
+from eq import locate, network, seismic, shaking  # noqa: E402
 from eq.pipeline import (ZNE_POST_S, ZNE_PRE_S, Config, Event, MagnitudeEnsemble, Pipeline, det_prep,  # noqa: E402
                          window_features)
 
@@ -214,6 +213,7 @@ def log_event(ev: Event, pushed, eligible):
         "mag_spread": None if ev.mag_spread is None else round(ev.mag_spread, 2),
         "sized_after_origin_s": None if ev.sized_at is None else round(ev.sized_at - ev.t0, 1),
         "sized_stations": ev.sized_stations,
+        "pgv_term": round(ev.pgv_term, 3),
         "push_eligible": bool(eligible),
         "pushed": int(pushed),
         # legacy fields read by crosscheck_events.py
@@ -253,7 +253,8 @@ def push_message(ev: Event, user_stations, stage="final", mode="standard"):
         body = (f"The full measurement came in at {size}, below the level people usually feel. "
                 f"You can disregard the earlier alert.")
         return title, body
-    label, _ = shaking_model.describe(shaking_model.estimate_mmi(ev.mag, d))
+    near = min(subs, key=lambda s: locate.haversine_km(ev.lat, ev.lon, *network.COORDS[network.INDEX[s]]))
+    label, _ = shaking.describe(shaking.estimate_mmi(ev.mag, d, shaking.CAL.get("station_vs30", {}).get(near), ev.pgv_term))
     shake = " Likely too far to be felt where you are." if label == "Not felt" else f" {label} shaking possible near you."
     title = f"M{ev.mag:.1f} earthquake confirmed ({region})"
     body = (f"{len(ev.stations)} sensors located it about {d:.0f} km from your nearest sensor.{shake} "
@@ -274,9 +275,22 @@ def alert_devices(ev: Event, tokens, dry_run, stage="final", mode=None):
         if not subs or reach.isdisjoint(subs) or (mode and t.get("mode", "standard") != mode):
             continue
         title, body = push_message(ev, subs, stage, mode or "standard")
-        if push_fcm.send_push(t["token"], title, body, dry_run, tag=f"quake-{ev.id}"):
+        if push_fcm.send_push(t["token"], title, body, dry_run, tag=f"quake-{ev.id}", data=quake_data(ev, stage, mode),
+                              data_only="local_text" in t.get("caps", [])):
             sent += 1
     return sent
+
+
+def quake_data(ev: Event, stage, mode):
+    """Hidden fields sent with every push: the app uses them to open the quake and estimate shaking at the user's
+    home on the device (and, for 'local_text' apps, to write the notification). The quick size stands in for the
+    magnitude until the full sizing exists."""
+    mag = ev.mag if stage != "early" or ev.mag is not None else ev.early.get(mode or "standard", {}).get("mag")
+    code, _ = nearest_station(ev.lat, ev.lon)
+    region = dict((s[0], s[4]) for s in network.LIVE_NETWORK)[code]
+    return {"type": "quake", "stage": stage, "mode": mode or "standard", "id": ev.id, "lat": round(ev.lat, 3),
+            "lon": round(ev.lon, 3), "t0": round(ev.t0, 1), "mag": None if mag is None else round(mag, 1),
+            "pgv_term": round(ev.pgv_term, 3), "region": region}
 
 
 def handle_early(pipe, ev, mode, dry_run, push_enabled):

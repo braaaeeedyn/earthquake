@@ -96,10 +96,12 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - Size: nearest-1-station ablation R² 0.808; live-like (10 km loc error, 3–6 stations) R² 0.939.
   Seed-averaged (10 seeds): single model R² 0.949 (t-CI 0.948–0.951), 10-seed ensemble 0.952 (bootstrap
   0.944–0.959); ΔR² vs baseline +0.067 (+0.056…+0.079). CIs = event-clustered bootstrap (`src/eq/stats.py`).
-- **Replay harness (the acceptance test)** on 10 held-out days: 93 % of confirmed events real (chance 0 %),
-  5 pushes / 0 false, magnitudes within ±0.13 of catalog, median location error 2.5 km. Event-centric
-  (833 test events, live geometry): 89 % located, mag bias +0.08, MAE 0.135, loc err 3.8 km. Old daemon,
-  same days: 6 pushes, all false.
+- **Replay harness (the acceptance test), 80 held-out days** (2022-04..2026-08, `data/processed/v2/replay/bigtest/`):
+  145 pushes, all real quakes, 92 % within 60 km (12 out-of-network quakes mislocated 63–145 km, all 3-station);
+  pushed mag bias +0.05 / MAE 0.12; confirmed precision 86 % busy / 79 % random days (chance 4 / 0 %), 7.4 false
+  confirmed/week (logged only); median loc err 3–3.6 km; catch M3+ 68 % (CI 60–74), 78 % with ≥3 stations up and
+  outside echo windows, M2+ 52 %; swarms 30 % vs isolated 73 %; 0 of 75 quakes inside the 120 s echo window caught.
+  Timing: Standard ~31 s, Fast ~25 s, confirmation ~50 s. (Old 10-day check, 93 % / 0 false, was too small.)
 
 ### Locked rules — do not change without asking
 - **Chronological splits only**, never random (temporal leakage). 70/15/15 by time. Hard negatives split
@@ -134,11 +136,13 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   `src/eq/pipeline.py` (detect → pick → locate → size → decide, all on data time). `/api/status` includes
   per-station health from `data/processed/live_status.json`. Other routes: `/api/ca`, `/api/geocode`,
   `/api/stations`, `/api/register-push`, `/api/unregister-push`, `/api/version`, `/api/contact`.
-  Push wording uses `shaking_model.py` (mag + distance). `/api/ca` lists only catchable quakes and
+  `/api/shaking-model` (MMI coefficients for the app). Push wording uses `src/eq/shaking.py` (MMI at the
+  subscriber's nearest followed station). `/api/ca` lists only catchable quakes and
   marks each caught / seen / missed against `events.jsonl`.
 - **FRONTEND (`app/`).** React + Vite + Capacitor. Detect/Size carousel (reads `seismic.json`, evidence
   figures from `make_figures.py`), interactive coverage map (`Coverage.tsx`, `socal_cities.json`),
-  biggest-quakes carousel with caught badges, "Alert me near me" (region-first, mobile app only),
+  biggest-quakes carousel with caught badges + "shaking at your home" line, `/quake` page (MMI at home),
+  "Alert me near me" (region-first, mobile app only; also saves the home on the device),
   `/health` model-health page (from `/api/health`), 95% CIs under the card numbers. (Ten homepage drafts
   were prototyped 2026-10-05 and removed 2026-10-06; the original layout was kept.) `PRODUCT.md` = audience/voice/principles for the impeccable skill; `PORTFOLIO.md` = portfolio write-up.
 - **QUAKEOPS (MLOps loop, HOW_IT_WORKS §12, design in `QUAKEOPS_IMPLEMENTATION.md`).** PC: MLflow-tracked
@@ -150,8 +154,8 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   build; tar deploy on main once secrets exist).
 
 ### Alerts: station subscription + located, 3-station confirmation (2026-10-05)
-- **Subscribe to STATIONS, not a coordinate.** `push_tokens.json` = `[{token, stations:[codes], name}]`,
-  no lat/lon stored. A device is alerted when a pushed event is within 150 km (`ALERT_REACH_KM`) of a
+- **Subscribe to STATIONS, not a coordinate.** `push_tokens.json` = `[{token, stations:[codes], name, mode, caps}]`,
+  no lat/lon stored (`caps: ["local_text"]` = app has native shaking text → gets data-only pushes). A device is alerted when a pushed event is within 150 km (`ALERT_REACH_KM`) of a
   station it follows; one message, distance from the located epicentre to its nearest followed station.
 - **CONFIRMED** = >= 3 P picks that one grid-search location fits (RMS <= 1.5 s), at most 1 healthy
   nearer station silent, nearest pick <= 120 km. 1–2 stations → TENTATIVE (logged, never pushed).
@@ -165,13 +169,32 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - Coda of a big quake can re-trigger: picks within 120 s / 100 km of a declared event are absorbed
   (costs: an aftershock inside that window is only logged as tentative).
 
+### Shaking at your location (MMI, 2026-10-07; HOW_IT_WORKS §13)
+- `src/eq/shaking.py` = the one model: log10 PGV = a + bM + c log R + dR + e log(Vs30/631) + event_term
+  (fit `calibrate_shaking.py` on v2 train events; test scatter 0.33 log10), Worden 2012 PGV→MMI, + DYFI
+  `mmi_offset` 0.76. Same equations in `app/src/shaking.ts` and `app/native/android/QuakeMessagingService.java`,
+  coefficients served by `/api/shaking-model` so all three stay identical.
+- Vs30: USGS global slope-proxy grid cropped to SoCal → `app/public/vs30_socal.json` (0.02°, + station_vs30).
+- Event term = clipped (±0.5) mean log residual of observed PGV at the sized stations (`Event.pgv_term`).
+- Validation (`validate_mmi.py`, DYFI 10 km cells, offset fitted on older 29 quakes, scored on newer 28 / 1,892
+  cells): MAE 0.42, bias +0.14, 93.8 % within one level; without offset 0.68; without site term 0.40.
+- **Privacy:** the home is saved on the device only (localStorage + Preferences `seismic.home`); the server
+  never sees it. Server push text uses the subscriber's nearest followed station instead.
+- Current AND past quakes: pushes carry `{type, stage, mode, id, lat, lon, t0, mag, pgv_term, region}`; a tap opens
+  `/quake`; the quake list shows a home-shaking line per quake.
+
 ### Run it
 - **Full stack (local):** `python scripts/server.py` + `cd app && npm run dev` (Vite proxies `/api` → `:8000`).
 - **Rebuild data:** `python scripts/build_dataset.py` (network-bound ~2 h; `--stage check|select|fetch|assemble`).
 - **Train:** `python scripts/demo_detect.py --retrain --seeds 5`, `python scripts/demo_magnitude.py --retrain --seeds 5`
   (CUDA torch is in `.venv`; RTX 4060).
 - **Replay / acceptance:** `python scripts/replay_archive.py scan|calibrate|run|events|compare-live` (see docstring).
-- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (26 tests); `ruff check scripts src tests`.
+- **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (32 tests); `ruff check scripts src tests`.
+- **Shaking (MMI):** `python scripts/calibrate_shaking.py` (fit on v2 train events) → `python scripts/validate_mmi.py`
+  (DYFI offset + held-out score; writes both into `data/processed/shaking_calibration.json`).
+- **Long jobs on this PC:** launch detached (`Start-Process powershell -WindowStyle Hidden -File <job>.ps1`), log to a
+  file, make them resumable — Claude Code's own background shells get reaped under low RAM. Examples:
+  `data/processed/v2/replay/bigtest/run_bigtest.ps1`, `.../swarmtune/run_swarmtune.ps1`. Don't auto-restart a reaped job.
 - **QuakeOps:** `python scripts/retrain.py --month YYYY-MM [--stage S] [--dry-run]`;
   `dagster dev -f scripts/quakeops_dagster.py`; `python scripts/tracking.py register-legacy|pull|status`;
   `python scripts/drift_check.py [--build-reference]`. Needs `MLFLOW_TRACKING_URI` (+ basic-auth user/pass) in `.env`.
@@ -196,13 +219,18 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - `crosscheck_events.py` line ~118 has a pre-existing unused variable (`c`) flagged by ruff F841 (ignored per file in
   `ruff.toml`, with the other legacy-script F errors). Its `--time-tol` / `--dist-tol` help text says 180 s / 100 km;
   the real defaults are 30 s / 60 km.
+- `shaking_calibration.json` is gitignored data that ships by scp. `shaking.load()` falls back to the built-in v2
+  coefficients if it finds the pre-v2 file (no `site` key) — the VM had that file until 2026-10-07.
+- Shaking levels round half UP everywhere (Python `math.floor(x+0.5)`, JS/Java `Math.round`); Python's `round`
+  is banker's rounding and once disagreed with the app at MMI 2.5.
+- The VM has a stray `x.ai/DESIGN.md` folder (Jul 7, a design reference); harmless, not part of the app.
 - MLflow prints emoji; `tracking.run` makes stdout tolerant (a cp1252 console used to crash at run end).
 - Low RAM: a local `mlflow server` + training at the same time can get reaped.
 - Deploys (tar) never delete files: CI removes server files git no longer tracks under scripts/src/tests before
   restarting; do the same by hand (DEPLOY.md QuakeOps preamble). A stale `src/eq/models/` package once shadowed
   `src/eq/models.py` and crash-looped the daemon for ~2 min (2026-10-06).
 
-### Deployed (status as of 2026-10-06)
+### Deployed (status as of 2026-10-07)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
 Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH session needs the user).
 - **Running:** `main` (deployed by CI on every push; v2 system, 19 stations — all up, two-stage alerts with the
@@ -214,6 +242,9 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Both alert-speed profiles running** (`early_mag_T2.json` copied 2026-10-06; daemon log: `alert-speed profiles: ['fast', 'standard']`).
 - **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
+- **MMI feature (2026-10-07):** server side deployed with `main` (shaking.py, /api/shaking-model, data fields on
+  pushes, v2 `shaking_calibration.json` scp'd, sha256 verified); website shows home shaking. The native
+  notification text needs **APK 2.01.00** (`app/native/android/README.md`), not built yet.
 - **QuakeOps live on the VM (2026-10-06):** `mlflow.service` (registry, `https://mlflow.seismicsocal.duckdns.org`,
   basic auth user `quakeops`); detector + magnitude registered as v1 `@champion`; `seismicsocal-quakeops.timer`
   (09:30 UTC) pulls the champion (`QUAKEOPS_AUTO_DEPLOY=0`) and runs the drift check; `/health` shows both models.
@@ -229,5 +260,13 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
   10 replay days), then schedule monthly (Dagster schedule or the Task Scheduler entry in DEPLOY.md step 9).
-- **Shaking calibration** (`calibrate_shaking.py`) still fits on the v1 dataset; re-fit on v2 when convenient.
+- **APK 2.01.00 (other device):** follow `app/native/android/README.md` (copy the two Java files, register the
+  plugin, swap the messaging service in the manifest, `npm install && npx cap sync`, version 2.01.00, build, test
+  that push_tokens.json shows `caps: ["local_text"]`), then raise `APP_LATEST_VERSION` to 2.01.00 (soft notice).
+  The Java was written blind (no Firebase project on this PC) — expect a compile fix or two.
+- **Push wording is too long** (user, 2026-10-06): shorter alternatives were drafted, none chosen yet. Wording lives
+  in `live_watch.push_message`; the native app prepends its own home-shaking line.
+- **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check
+  with more quakes or point (not 10 km cell) data before claiming it helps.
+- **Swarm misses** are the biggest catch-rate loss (HOW_IT_WORKS §6.3–6.4); see the swarm-tuning result there.
 - Drift reference has only ~280–650 training noise windows per station; if `watch` flaps, grow `NOISE_TIMES`.

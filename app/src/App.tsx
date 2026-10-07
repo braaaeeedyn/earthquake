@@ -5,6 +5,7 @@ import { enablePush, disablePush, initPush, isNativeApp, subscribedStations, sub
 import { getMyLocation } from './geo'
 import { APP_VERSION, mustUpdate, updateAvailable } from './version'
 import Coverage from './Coverage'
+import { clearHome, getHome, homeShaking, loadShakingModel, setHome, type Home } from './shaking'
 
 // The public site, for sending the app to the download/update page in an external browser.
 const APP_SITE = 'https://seismicsocal.duckdns.org'
@@ -18,14 +19,14 @@ type State =
 const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
-    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 20 real days it caught about 8 in 10 quakes of M2 and up, with no false alerts.',
+    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 80 held-out days it caught about 7 in 10 quakes of M3 and up (about 8 in 10 outside busy aftershock sequences). Every alert it sent was for a real quake, though about 1 in 12 was placed more than 60 km off.',
     tech: [
       'Input: the vertical channel of each station, 30 s at 100 Hz, causally band-limited (1 Hz high-pass, 18 Hz low-pass) and scaled to unit variance — the same preparation in training and live.',
       'Model: 4 strided 1-D convolutions (16→64 channels) turn the trace into a feature sequence; a 2-layer Transformer encoder reads it and a linear head gives P(earthquake). Selected from 5 seeds on validation AUC.',
       'Training data: 34,377 event windows (P-wave placed anywhere 1–25 s into the window), 14,304 noise windows from all hours with no catalogued M1+ quake nearby, and 2,062 hard negatives — the previous live system’s own false alarms. Chronological split, 2000–2026.',
       'Held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886; the classic STA/LTA trigger on the same input reaches AUC 0.816.',
       'Live: a window above 0.6 triggers a P-wave pick (STA/LTA onset refined by an Akaike picker). Picks from ≥3 stations are located by grid search; the event is confirmed only if one source fits them (RMS ≤ 1.5 s) and no working station closer to it stayed silent.',
-      'Replay of the exact live code on 20 archived days: located events within 2.5 km (median); 75–86 % of in-coverage M2+ quakes caught (86 % of M3+); 0 false push alerts.',
+      'Replay of the exact live code on 80 held-out days (2022–2026): 68 % of M3+ quakes caught (78 % outside aftershock sequences with ≥3 stations online), 52 % of M2+; 145 push alerts, every one a real quake, 92 % placed within 60 km; median location error 3–4 km.',
     ],
   },
   {
@@ -48,14 +49,15 @@ function navigate(path: string) {
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
-type Route = 'home' | 'app' | 'privacy' | 'health' | 'notfound'
+type Route = 'home' | 'app' | 'privacy' | 'health' | 'quake' | 'notfound'
 const ROUTE_OF = (p: string): Route =>
-  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : p === '/health' ? 'health' : 'notfound'
+  p === '/' ? 'home' : p === '/app' ? 'app' : p === '/privacy' ? 'privacy' : p === '/health' ? 'health' : p === '/quake' ? 'quake' : 'notfound'
 const PAGE_TITLES: Record<Route, string> = {
   home: 'SeismicSoCal · Southern California earthquake ML',
   app: 'Get the app · SeismicSoCal',
   privacy: 'Privacy policy · SeismicSoCal',
   health: 'Model health · SeismicSoCal',
+  quake: 'Earthquake · SeismicSoCal',
   notfound: 'Page not found · SeismicSoCal',
 }
 
@@ -78,6 +80,7 @@ export default function App() {
       .then((data) => active && setState({ status: 'ready', data }))
       .catch((e) => active && setState({ status: 'error', message: String(e?.message ?? e) }))
     initPush()          // register foreground push handlers (no-op on web)
+    loadShakingModel().catch(() => {})   // cache the shaking equations (also for the native notification code)
     if (isNativeApp()) {
       // Version gate (installed app only): behind the server's MIN on major/minor -> block. Fail OPEN
       // on a network error so an offline user is never locked out by a failed check.
@@ -128,6 +131,7 @@ export default function App() {
         {route === 'app' && <AppDownload />}
         {route === 'privacy' && <Privacy />}
         {route === 'health' && <ModelHealth />}
+        {route === 'quake' && <QuakeDetail />}
         {route === 'notfound' && <NotFound />}
         {route === 'home' && (
           <>
@@ -362,8 +366,8 @@ function Privacy() {
         SeismicSoCal collects data <strong>only if you subscribe to alerts inside the app</strong>.
         When you subscribe we store: the name you enter, the sensor stations you choose to follow, your alert-speed setting,
         and your device’s push-notification token. We do <strong>not</strong> store your location —
-        it is used only on your device, at signup, to rank which stations are nearest you, and is
-        never sent to us. The public website collects no personal data and has no subscribe function -
+        it is used only on your device: to rank which stations are nearest you, and, saved on the device as your
+        “home”, to estimate how strongly each quake shook there. It is never sent to us. The public website collects no personal data and has no subscribe function -
         alerts exist only in the app.
       </p>
 
@@ -779,6 +783,54 @@ const fmtDate = (ms?: number) =>
   ms ? new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
 
 // A top-5 list (World or California) - each row is display-only (not a link).
+const quakeHref = (e: UsgsEvent) =>
+  `/quake?${new URLSearchParams({ lat: String(e.lat), lon: String(e.lon), mag: String(e.mag), t: String(e.time ?? ''), place: e.place })}`
+
+// "Light (IV) at your home · 34 km away" under a quake, when the user has saved a home on this device.
+function HomeShakingLine({ lat, lon, mag, term = 0 }: { lat: number; lon: number; mag: number; term?: number }) {
+  const [line, setLine] = useState<string | null>(null)
+  useEffect(() => {
+    let on = true
+    const run = () => homeShaking(lat, lon, mag, term)
+      .then((h) => on && setLine(h ? `Est. at your home: ${h.label} (${h.roman}) · ${Math.round(h.km)} km away` : null))
+      .catch(() => on && setLine(null))
+    run()
+    window.addEventListener('home-changed', run)
+    return () => { on = false; window.removeEventListener('home-changed', run) }
+  }, [lat, lon, mag, term])
+  return line ? <p className="home-shaking">{line}</p> : null
+}
+
+// One quake (from a list or a tapped alert): size, place, time and the estimated shaking at the user's home.
+function QuakeDetail() {
+  const q = new URLSearchParams(window.location.search)
+  const lat = Number(q.get('lat')), lon = Number(q.get('lon')), mag = Number(q.get('mag')), term = Number(q.get('term') || 0)
+  const t = Number(q.get('t')), place = q.get('place') || 'Southern California', stage = q.get('stage')
+  const [h, setH] = useState<Awaited<ReturnType<typeof homeShaking>> | 'none' | null>(null)
+  useEffect(() => { homeShaking(lat, lon, mag, term).then((r) => setH(r ?? 'none')).catch(() => setH('none')) }, [lat, lon, mag, term])
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(mag)) return <NotFound />
+  return (
+    <section className="legal quake-detail">
+      <p className="eyebrow">Earthquake{stage === 'early' ? ' · size being confirmed' : ''}</p>
+      <h1>M{mag.toFixed(1)} · {place}</h1>
+      <p className="legal-updated">{t ? new Date(t).toLocaleString() : ''} · {lat.toFixed(2)}, {lon.toFixed(2)}</p>
+      <h2>How strong was it at your home?</h2>
+      {h === null && <p className="muted">Estimating…</p>}
+      {h === 'none' && <p>Set your home in <a href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}>Alert me near me</a> (use your
+        location or search a city) to see the estimated shaking there. Your home is stored only on this device.</p>}
+      {h && h !== 'none' && (
+        <div className="card mmi-card">
+          <p className="mmi-big">{h.label} <span>MMI {h.roman}</span></p>
+          <p>{h.desc[0].toUpperCase() + h.desc.slice(1)}. About {Math.round(h.km)} km from {h.home.label}.</p>
+          <p className="muted">An estimate from the magnitude, the distance and the ground type at your home{term ? ', adjusted by how strongly this quake shook our sensors' : ''}.
+            Checked against USGS “Did You Feel It?” reports: within one level in about 9 of 10 places. Not an official measurement.</p>
+        </div>
+      )}
+      <p className="app-back"><a className="back-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/') }}><Arrow dir="left" />Back to the console</a></p>
+    </section>
+  )
+}
+
 function QuakeList({ title, events }: { title: string; events?: UsgsEvent[] }) {
   return (
     <div className="qlist">
@@ -787,12 +839,13 @@ function QuakeList({ title, events }: { title: string; events?: UsgsEvent[] }) {
       <ul className="recent-list">
         {events?.map((e) => (
           <li key={e.id}>
-            <div className="recent-link">
+            <a className="recent-link" href={quakeHref(e)} onClick={(ev) => { ev.preventDefault(); navigate(quakeHref(e)) }}>
               <span className={`m ${e.mag >= 5 ? 'hi' : ''}`}>M{e.mag.toFixed(1)}</span>
               <span className="place">{e.place}</span>
               <span className="r">{fmtDate(e.time)}</span>
-            </div>
+            </a>
             {e.caught && <CaughtBadge c={e.caught} />}
+            <HomeShakingLine lat={e.lat} lon={e.lon} mag={e.mag} />
           </li>
         ))}
       </ul>
@@ -973,6 +1026,7 @@ function NearMe() {
   const [searching, setSearching] = useState(false)
   const [opened, setOpened] = useState<Set<string>>(new Set())   // regions the user expanded by hand
   const [mode, setMode] = useState<AlertMode>(subscribedMode())   // alert speed for the first message
+  const [home, setHomeState] = useState<Home | null>(getHome())          // for shaking estimates (device only)
   const [liveMode, setLiveMode] = useState<AlertMode>(subscribedMode())
 
   const subscribed = subscribedSet.size > 0                    // subscribed iff we track live stations
@@ -998,7 +1052,8 @@ function NearMe() {
   // Given the user's coordinates, compute distance to every station and auto-select the nearest
   // few within the cap. The coordinates are used only here to rank stations — they are never stored;
   // only the chosen station codes are sent to the server.
-  const applyLocation = (lat: number, lon: number) => {
+  const applyLocation = (lat: number, lon: number, label = 'your location') => {
+    setHome(lat, lon, label).then(setHomeState).catch(() => {})   // saved on this device only (shaking estimates)
     const d: Record<string, number> = {}
     for (const st of stations) d[st.code] = kmBetween(lat, lon, st.lat, st.lon)
     setDist(d)
@@ -1021,7 +1076,7 @@ function NearMe() {
     setMsg(null)
     try {
       const r = await geocode(`${city.trim()}, ${stateName.trim() || 'CA'}`)
-      applyLocation(r.lat, r.lon)
+      applyLocation(r.lat, r.lon, city.trim())
     } catch (err) {
       setMsg({ kind: 'err', text: `Couldn’t find that place: ${(err as Error).message}` })
     } finally {
@@ -1180,6 +1235,13 @@ function NearMe() {
           <button type="button" className="btn-outline locate-btn" onClick={useMyLocation}>
             Use my location
           </button>
+
+          {home && (
+            <p className="home-note">
+              Home for shaking estimates: <strong>{home.label}</strong> (saved on this device only) ·{' '}
+              <button type="button" className="linklike" onClick={() => { clearHome(); setHomeState(null) }}>Clear</button>
+            </p>
+          )}
 
           <fieldset className="station-picker">
             <legend>

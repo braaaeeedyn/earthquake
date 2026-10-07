@@ -202,7 +202,8 @@ Training data and live data are aligned by the **same picker**.
 
   A per-window trigger is not an alert. It must also give a pick with SNR ≥ 3, and the picks of 3
   stations must locate one source with no silent nearer station. False *events* are therefore measured
-  by the replay harness (§6.3: 3.5 false confirmed events/week, 0 false pushes) and, live, by the
+  by the replay harness (§6.3: about 7 false confirmed events/week on ordinary days, logged only; no
+  push for a quake that did not happen) and, live, by the
   nightly crosscheck.
 
 - **Memorization check:** train, validation and test AUC are 0.9998 / 0.9999 / 0.9998.
@@ -366,8 +367,12 @@ if stations are late):
 
 - **Replacement:** every stage of an event carries the Android notification tag `quake-<event id>`, so
   a later stage **replaces** the earlier one in the notification tray.
-- **Shaking wording:** "Weak shaking possible near you" and similar come from `shaking_model.py`, which
-  maps magnitude and distance to an intensity label.
+- **Shaking wording:** "Weak shaking possible near you" and similar come from `src/eq/shaking.py` (§13): the
+  estimated intensity at the subscriber's nearest followed station, with that station's ground type and this
+  quake's event term.
+- **Data fields:** every push also carries the quake (`id, stage, lat, lon, t0, mag, pgv_term, region`). A tap
+  opens the quake page in the app; apps with native shaking code (`caps: ["local_text"]`) get a **data-only**
+  push and write the notification themselves, with the shaking at the user's home (§13).
 - **Who gets it:** each device following any station within **150 km** of the epicentre gets one
   message per stage.
 - **Off switch:** pushes only go out when `PUSH_ENABLED=1` is in the server's `.env`. With it off
@@ -429,30 +434,39 @@ data.
 
 ### 6.3 Results on held-out days
 
-On 10 test days (Oct 2–5 and Aug 18–25, 2026):
+**Large-sample test: 80 held-out days** (Apr 2022 – Aug 2026; 60 days that had an M3+ quake in coverage plus 20
+random days; `data/processed/v2/replay/bigtest/`, `summary.json`). Run once, after all calibration was frozen.
 
 | | Result |
 |---|---|
-| Confirmed events that are real | **93%** (chance 0%) |
-| Pushes | 5 confirmations, **0 false** |
-| Provisional pushes | 6, all for real M2.5+ quakes, one later retracted |
-| Location error | median **2.5 km** |
-| Final magnitude vs catalogue on pushed quakes | within 0.13 |
-| In-coverage M3+ caught | 4 of 5; the miss came 80 s after an M4.0 at the same spot, inside the coda-suppression window |
+| Pushes | **145**; 133 (92%) matched a catalogued M2.5+ quake. The other 12 were also real quakes, but located 63–145 km off (all confirmed by exactly 3 stations, mostly outside the network). **None was for a quake that did not happen.** Chance baseline 0% |
+| Pushed size vs catalogue | bias +0.05, MAE 0.12, 89% within 0.3 |
+| Confirmed events that are real | 86% on busy days, 79% on random days (chance 4% / 0%) |
+| False confirmed events (logged, never pushed) | 7.4 / week on ordinary days |
+| Location error (confirmed, median) | 3.0–3.6 km |
+| First message, after origin (median) | Standard 29–34 s, Fast 22–28 s; confirmation 48–54 s |
+| First messages later retracted | Standard 28% (178 sent), Fast 36% (203 sent) |
 
-Event-centric test (833 test quakes, live geometry):
-- located 89%;
-- median location error 3.8 km;
-- magnitude MAE 0.135 (bias +0.08).
+Catch rate (catalogued quakes in coverage, 95% event-bootstrap CI):
 
-Catch rate by size inside coverage, over all 20 replayed days:
+| Magnitude | M1–1.5 | M1.5–2 | M2–2.5 | M2.5–3 | M3+ | M2+ |
+|---|---|---|---|---|---|---|
+| Caught | 9% | 29% | 41% | 60% | **68%** (60–74%) | 52% |
 
-| Magnitude | M1–1.5 | M1.5–2 | M2–2.5 | M2.5–3 | M3+ |
-|---|---|---|---|---|---|
-| Caught | 9% | 48% | 81% | 75% | 86% |
+Where the misses are:
+- **Aftershock swarms.** Isolated M2+ quakes: 73% caught. Inside swarms (10+ quakes in 10 min): 30%.
+  Quakes that start inside the 120 s echo window of an event already declared nearby: **0 of 75** — they are
+  absorbed into the earlier event by design (§5.2). Tuning for this: §6.4.
+- **Stations down.** On some archive days several stations have no data (Apr 16 2024: 5 down). With ≥ 3
+  stations online and outside the echo window, M3+ catch is **78%**.
+- Below M2 is outside the magnitude training range; those quakes size slightly high (around M2), still below
+  the push floor.
 
-Quakes below M2 are outside the magnitude training range and size slightly high (around M2), which is
-still below the push floor.
+The earlier **10-day held-out check** (Oct 2–5 + Aug 18–25 2026) looked better — 93% of confirmed events real,
+5 pushes / 0 false, catch 86% at M3+ — but on 5 M3+ quakes; the 80-day numbers above are the ones to quote.
+Event-centric test (833 test quakes, live geometry): located 89%, median location error 3.8 km, magnitude MAE
+0.135 (bias +0.08).
+
 
 ---
 
@@ -461,6 +475,7 @@ still below the push floor.
 | Route | What it does |
 |---|---|
 | `GET /api/stations` | The 19 stations (code, lat, lon, region) from `network.py`. |
+| `GET /api/shaking-model` | The shaking equations' coefficients, MMI levels and validation (§13); the app computes home shaking itself. |
 | `GET /api/status` | Whether the daemon is running, plus per-station up/latency and whether pushes are enabled. |
 | `GET /api/ca?window=day\|week\|month\|year\|all` | The largest SoCal quakes in the window from USGS (details below). |
 | `GET /api/geocode?q=` | City lookup (Nominatim, limited to California) for "find sensors near you". |
@@ -482,8 +497,8 @@ still below the push floor.
   - `missed`: no match;
   - none: the quake predates the live v2 pipeline (2026-10-05 09:13 UTC).
 
-**Subscriptions** live in `data/processed/push_tokens.json` as `[{token, stations:[codes], name}]`.
-No location is stored.
+**Subscriptions** live in `data/processed/push_tokens.json` as `[{token, stations:[codes], name, mode, caps}]`
+(`mode` = alert speed, `caps` = `["local_text"]` for apps with native shaking text). No location is stored.
 
 ---
 
@@ -508,7 +523,10 @@ No location is stored.
   - your coordinates are only used on the device to rank regions;
   - registering sends the chosen station codes and the push token.
 - **Biggest Southern California quakes:** Day / Week / Month / Year / All time from `/api/ca`, each
-  with its caught / seen / not-caught mark.
+  with its caught / seen / not-caught mark and, if a home is saved, "Light shaking likely at <home>". Each row
+  opens the **quake page** (`/quake?lat&lon&mag&t&place`): estimated shaking at your home (§13).
+- **Home location:** "Use my location" or a city search in Alert me near me also saves it as the home for shaking
+  estimates, on the device only (localStorage + Capacitor Preferences `seismic.home`), with a Clear link.
 - **Model health** (`/health`, footer link):
   the live Detect and Size versions with held-out metrics ± 95% CI against their baselines, a drift pill
   per station (outlined = ok, gray = watch, black = drifting, dashed = no data; each labelled in text),
@@ -688,3 +706,57 @@ and calibrating it is a deliberate, manual step.
 - **Outputs:** HTML reports in `data/processed/drift/<date>/`, `drift_status.json` and
   `drift_history.jsonl`. An email is sent when a station has been drifting for 2 days in a row. Data
   older than 90 days is deleted.
+
+---
+
+## 13. Shaking at your location (MMI) — `src/eq/shaking.py`, `app/src/shaking.ts`
+
+**What it answers:** "how strong was (or is) the shaking at my home?", as a Modified Mercalli Intensity level
+(I–X, e.g. "Light — felt indoors; dishes and windows rattle"). It works for **current** quakes (the push and the
+quake page, seconds after sizing) and **past** ones (every quake in the Biggest-quakes list). It is an estimate
+from magnitude, distance and ground type, not a measurement at your home.
+
+**The equations** (one set, implemented three times — Python for the server, TypeScript for the app, Java for
+the native notification — all reading the same coefficients from `/api/shaking-model`):
+
+1. Ground motion: `log10(PGV m/s) = a + b·M + c·log10(R) + d·R + e·log10(Vs30 / 631) + event_term`, R = epicentral
+   km (≥ 1). Fitted by `scripts/calibrate_shaking.py` on the **train** events of `v2/magnitude.npz` (25,526 station
+   records, chronological split): a = −5.697, b = 0.981, c = −0.868, d = −0.00456, e = −0.406. Test-event scatter
+   0.33 log10 units (a factor ~2).
+2. **Site term** (Vs30 = shear-wave speed of the top 30 m; soft ground shakes harder): the USGS global Vs30 map
+   (slope proxy, `global_vs30.grd`) cropped to SoCal on a 0.02° grid → `app/public/vs30_socal.json` (330 KB,
+   includes each station's Vs30). Reference 631 m/s = the median at our stations.
+3. **Event term** (live quakes only): after full sizing, the mean log residual of the observed peak velocity at the
+   sized stations vs the equation, clipped to ±0.5 (`Event.pgv_term`, logged in `events.jsonl` and sent with each
+   push). It corrects a quake that shook harder or softer than average, like ShakeMap's bias correction.
+4. PGV → MMI: Worden et al. (2012) bilinear relation, plus a **+0.76 offset**: people's "Did You Feel It?" reports
+   run higher than instrument-based intensity at these small magnitudes.
+
+**Validation** (`scripts/validate_mmi.py` → `data/processed/mmi_validation.json`): USGS DYFI 10 km cells
+(≥ 3 responses) for SoCal M3.5+ quakes in the held-out period (2022-04-15 … 2026-08-31). The offset is fitted on
+the older 29 quakes and scored once on the newer **28 quakes / 1,892 cells**:
+
+| | MAE (MMI levels) | within 1 level |
+|---|---|---|
+| this model | **0.42** (bias +0.14) | **93.8%** |
+| without the DYFI offset | 0.68 | — |
+| without the site term | 0.40 | — |
+
+The site term gave **no measurable gain** on DYFI (10 km cells average over many ground types); it is kept
+because it is physically right and fitted from our own records, but it is not what makes the estimate work.
+Errors are flat with distance (0.45 / 0.42 / 0.41 at 0–50 / 50–100 / 100+ km).
+
+**Where it runs (privacy):** the home location never leaves the device.
+- Server (`live_watch.push_message`): shaking at the subscriber's **nearest followed station** (with that
+  station's Vs30), for the push wording that every app version receives.
+- App (`shaking.ts`): `loadShakingModel()` fetches `/api/shaking-model` + `vs30_socal.json` at start and caches
+  the model in Preferences; `homeShaking(lat, lon, mag, term)` gives the line under each quake and the quake page.
+- Native Android (`app/native/android/`, APK **2.01.00**, built on the other device): `QuakeMessagingService`
+  receives the data-only push, reads `seismic.home` + `seismic.shaking_model` from Capacitor Preferences and
+  writes "Light shaking likely at Pasadena (MMI IV, 34 km)" above the server's text. Any error falls back to the
+  server's text. `QuakeNativePlugin` is a marker: the JS registers `caps: ["local_text"]` only when it exists, so
+  older APKs keep getting ordinary notifications.
+
+**Limits:** quakes outside the network can be mislocated by tens of km (§6.3), which moves the estimate; depth is
+ignored (8 km); one 10 km DYFI cell averages many sites, so the error at a single house is larger than 0.42.
+

@@ -68,6 +68,8 @@ class Config:
     alert_min_mag: float = 3.0     # felt-shaking push floor (final, full-window magnitude)
     early_max_wait: float = 20.0   # s past the ideal quick-check time before giving up on it
     scan_step: float = 2.0         # s between detection windows per station
+    split_picks: bool = False      # swarms: if the window's picks fit no single source, retry on time-sliced subsets
+    split_moveout: float = 35.0    # s, a subset = picks within this of its earliest pick (P moveout across ~200 km)
 
     @classmethod
     def load(cls, path=CONFIG_FILE):
@@ -156,6 +158,7 @@ class Event:
     sized_stations: list = field(default_factory=list)
     silent_near: int = 0
     early: dict = field(default_factory=dict)   # quick check per profile: mode -> {"mag", "at" (data time)}
+    pgv_term: float = 0.0                 # how much harder (+) / softer (-) it shook our stations than predicted (log10)
     sized_at: float | None = None         # data time the full sizing ran
 
     @property
@@ -241,28 +244,42 @@ class Pipeline:
         cfg = self.cfg
         self.picks = [p for p in self.picks if now - p.t <= cfg.assoc_window + 60]
         free = [p for p in self.picks if not p.used and now - p.t <= cfg.assoc_window]
-        best = {}
-        for p in free:                                 # one (earliest) pick per station
-            if p.sta not in best or p.t < best[p.sta].t:
-                best[p.sta] = p
-        if len(best) >= cfg.min_stations:
+        # candidate pick sets: the whole window; with split_picks, also each time slice starting at a pick (two
+        # overlapping quakes in one window otherwise mix their picks and no single source fits)
+        groups = [free]
+        if cfg.split_picks:
+            seen = set()
+            for a in sorted(free, key=lambda p: p.t):
+                g = [q for q in free if a.t <= q.t <= a.t + cfg.split_moveout]
+                key = frozenset(map(id, g))
+                if len(g) >= cfg.min_stations and key not in seen:
+                    seen.add(key)
+                    groups.append(g)
+        for group in groups:
+            best = {}
+            for p in group:                            # one (earliest) pick per station
+                if p.sta not in best or p.t < best[p.sta].t:
+                    best[p.sta] = p
+            if len(best) < cfg.min_stations:
+                continue
             sol = self.loc.locate({s: p.t for s, p in best.items()})
-            if sol and len(sol["used"]) >= cfg.min_stations and sol["rms"] <= cfg.max_rms and self._duplicate(sol):
+            if not (sol and len(sol["used"]) >= cfg.min_stations and sol["rms"] <= cfg.max_rms):
+                continue
+            if self._duplicate(sol):
                 for s in sol["used"]:                  # later phases / coda of an event already declared
                     best[s].used = True
                 return
-            if sol and len(sol["used"]) >= cfg.min_stations and sol["rms"] <= cfg.max_rms:
-                ev = Event(sol["lat"], sol["lon"], sol["t0"], sol["rms"], sol["used"],
-                           {self.codes[s]: round(best[s].t, 2) for s in sol["used"]}, True, now)
-                ev.silent_near = self._silent_near(ev)
-                d = locate.haversine_km(ev.lat, ev.lon, self.coords[sol["used"], 0], self.coords[sol["used"], 1])
-                if ev.silent_near <= cfg.max_silent_near and d.min() <= cfg.max_nearest_km:
-                    for s in sol["used"]:
-                        best[s].used = True
-                    self.events.append(ev)
-                    self.pending.append(ev)
-                    self.early_pending += [(ev, m) for m in self.early]
-                    return
+            ev = Event(sol["lat"], sol["lon"], sol["t0"], sol["rms"], sol["used"],
+                       {self.codes[s]: round(best[s].t, 2) for s in sol["used"]}, True, now)
+            ev.silent_near = self._silent_near(ev)
+            d = locate.haversine_km(ev.lat, ev.lon, self.coords[sol["used"], 0], self.coords[sol["used"], 1])
+            if ev.silent_near <= cfg.max_silent_near and d.min() <= cfg.max_nearest_km:
+                for s in sol["used"]:
+                    best[s].used = True
+                self.events.append(ev)
+                self.pending.append(ev)
+                self.early_pending += [(ev, m) for m in self.early]
+                return
         # tentative: picks that waited long enough without forming a confirmed event
         stale = [p for p in free if now - p.t > cfg.tentative_after]
         if stale:
@@ -329,6 +346,9 @@ class Pipeline:
             if mask.sum():
                 ev.mag, ev.mag_spread = self.mag.predict(X, mask, d.astype(np.float32))
                 ev.sized_stations = [self.codes[i] for i in np.flatnonzero(mask)]
+                from .shaking import event_term
+                idx = np.flatnonzero(mask)
+                ev.pgv_term = event_term(ev.mag, d[idx], np.abs(X[idx]).max(axis=(1, 2)), ev.sized_stations)
             self.on_event(ev)
 
     # ------------------------------------------------------------ quick check (preliminary size)

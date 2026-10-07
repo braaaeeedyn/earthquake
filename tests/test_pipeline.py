@@ -167,3 +167,20 @@ def test_sizing_waits_for_picking_stations_beyond_the_size_radius():
     assert p.pending == [ev]
     p.size_ready(500.0)                                   # past the wait: sized with what's available
     assert not p.pending
+
+
+def test_split_picks_separates_two_overlapping_quakes():
+    """Two quakes ~20 s apart at distant spots: their picks share one 90 s window and fit no single source.
+    Without split_picks the first quake's picks age into a tentative event (lost); with it both are confirmed."""
+    def run(split):
+        p = Pipeline(None, None, network.COORDS, network.CODES, Src(), Config(split_picks=split))
+        _picks(p, 34.1, -117.4, 0.0, 4)                  # quake A (Inland Empire)
+        _picks(p, 35.6, -117.6, 20.0, 4)                 # quake B (Ridgecrest), 20 s later
+        p.associate(60.0)
+        p.associate(61.0)                                # the engine re-associates every step
+        return [e for e in p.events if e.confirmed]
+    assert len(run(False)) == 1                          # mixed picks: quake A ages into 'tentative' and is lost
+    got = run(True)                                      # each quake's own picks confirm it, one per pass
+    assert len(got) == 2
+    assert min(locate.haversine_km(e.lat, e.lon, 34.1, -117.4) for e in got) < 15
+    assert min(locate.haversine_km(e.lat, e.lon, 35.6, -117.6) for e in got) < 15

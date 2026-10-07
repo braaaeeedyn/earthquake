@@ -35,12 +35,13 @@ def load_tokens():
     return []
 
 
-def save_token(token, stations, name="", mode="standard"):
+def save_token(token, stations, name="", mode="standard", caps=()):
     """Upsert a device by token (a device's FCM token is its identity). `stations` is the list of
     sensor codes this device subscribes to (e.g. ['CCC','MWC']); `mode` is its alert speed for the first
-    message ('standard' = most safeguards, 'fast' = earlier, less certain). Returns the full list."""
+    message ('standard' = most safeguards, 'fast' = earlier, less certain); `caps` = what the app can do
+    ('local_text': its native code builds the notification itself, with shaking at the user's home). Returns the list."""
     toks = load_tokens()
-    entry = {"token": token, "stations": [str(s) for s in stations], "name": name, "mode": mode}
+    entry = {"token": token, "stations": [str(s) for s in stations], "name": name, "mode": mode, "caps": list(caps)}
     toks = [t for t in toks if t.get("token") != token]     # replace stale subscription for same device
     toks.append(entry)
     TOKENS.parent.mkdir(parents=True, exist_ok=True)
@@ -68,12 +69,30 @@ def _access_token():
     return _creds.token, _creds.project_id
 
 
-def send_push(token, title, body, dry_run=False, tag=None):
+def build_message(token, title, body, tag=None, data=None, data_only=False):
+    """FCM v1 message. Normal: a notification Android shows itself (+ data for when it's tapped). data_only: no
+    notification block -- the app's native QuakeMessagingService writes it (title/body ride along as fallback)."""
+    fields = {k: str(v) for k, v in (data or {}).items() if v is not None}
+    if data_only:
+        return {"message": {"token": token, "data": {**fields, "title": title, "body": body, "tag": tag or ""},
+                            "android": {"priority": "high"}}}
+    return {"message": {
+        "token": token,
+        "notification": {"title": title, "body": body},
+        **({"data": fields} if fields else {}),
+        "android": {"priority": "high", **({"notification": {"tag": tag}} if tag else {})},
+    }}
+
+
+def send_push(token, title, body, dry_run=False, tag=None, data=None, data_only=False):
     """Push one notification to one device token via FCM HTTP v1.
 
     `tag`: pushes with the same tag REPLACE each other in the Android notification tray -- the live
     daemon tags both stages of an event with its id, so the confirmation (or retraction) overwrites
     the provisional "detected, sizing..." notice instead of stacking under it.
+    `data`: string fields delivered to the app (the quake: id, lat, lon, mag, ...), used when a notification is
+    tapped and, with data_only=True, by the app's native code to write the notification itself (title/body below
+    become its fallback text). Only devices that registered the 'local_text' capability get data_only pushes.
     dry_run or missing service-account key -> print instead of send (returns False so callers
     can count real sends). Mirrors mailer.send_email's fail-soft behaviour.
     """
@@ -84,11 +103,7 @@ def send_push(token, title, body, dry_run=False, tag=None):
     import requests
     access, project_id = _access_token()
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
-    msg = {"message": {
-        "token": token,
-        "notification": {"title": title, "body": body},
-        "android": {"priority": "high", **({"notification": {"tag": tag}} if tag else {})},
-    }}
+    msg = build_message(token, title, body, tag, data, data_only)
     r = requests.post(url, headers={"Authorization": f"Bearer {access}",
                                     "Content-Type": "application/json"},
                       data=json.dumps(msg), timeout=15)

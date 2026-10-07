@@ -85,7 +85,10 @@ export async function enablePush(sub: { name: string; stations: string[]; mode: 
   if (perm.receive !== 'granted') throw new Error('notification permission denied')
 
   const token = await awaitToken()
-  await registerPushToken({ token, stations: sub.stations, name: sub.name, mode: sub.mode })
+  // 'local_text': this APK includes the native QuakeMessagingService (app/native/android), so the server may send
+  // data-only pushes and the phone writes the notification itself, with the estimated shaking at home.
+  const caps = Capacitor.isPluginAvailable('QuakeNative') ? ['local_text'] : []
+  await registerPushToken({ token, stations: sub.stations, name: sub.name, mode: sub.mode, caps })
   try {
     localStorage.setItem(SUBSCRIBED_KEY, '1')
     localStorage.setItem(TOKEN_KEY, token)
@@ -128,6 +131,13 @@ export async function initPush() {
     console.log('[push] received in foreground:', n.title, n.body)
   })
   await PushNotifications.addListener('pushNotificationActionPerformed', (a) => {
-    console.log('[push] tapped:', a.notification.title)
+    // a tapped alert opens that quake's page (with the estimated shaking at the user's home)
+    const d = (a.notification.data ?? {}) as Record<string, string>
+    if (d.type === 'quake' && d.lat && d.lon && d.mag) {
+      const q = new URLSearchParams({ lat: d.lat, lon: d.lon, mag: d.mag, t: String(Math.round(Number(d.t0) * 1000)),
+        place: d.region ?? '', term: d.pgv_term ?? '0', stage: d.stage ?? '' })
+      window.history.pushState({}, '', `/quake?${q}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
   })
 }

@@ -1,7 +1,7 @@
 """SeismicSoCal backend (stdlib HTTP, behind Caddy): the site/app API + supervisor of the live daemon.
 
 No framework. The Vite dev server proxies /api/* here. Routes: /api/stations, /api/status, /api/ca,
-/api/health, /api/geocode, /api/version, POST /api/register-push, /api/unregister-push, /api/contact.
+/api/health, /api/shaking-model, /api/geocode, /api/version, POST /api/register-push, /api/unregister-push, /api/contact.
 Alerts are push-only (app-only product); a device sends {token, stations, name, mode} and receives FCM
 pushes from the live watcher (live_watch.py, spawned and respawned here) for quakes near its stations.
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 import push_fcm  # noqa: E402
 import mailer  # noqa: E402,F401  (import loads .env into os.environ)
-from eq import network  # noqa: E402
+from eq import network, shaking  # noqa: E402
 from eq.locate import haversine_km  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8000"))
@@ -243,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"error": str(e)})
         elif path == "/api/stations":
             return self._send(200, {"stations": STATIONS})
+        elif path == "/api/shaking-model":
+            # the shaking equations + coefficients; the app estimates intensity at the user's home on the device
+            return self._send(200, shaking.model_for_clients())
         elif path == "/api/health":
             # QuakeOps: live model versions + metrics/CIs + promotion history (tracking.py pull -> models.json),
             # per-station drift (drift_check.py -> drift_status.json), and what the daemon actually loaded
@@ -313,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
         mode = sub.get("mode", "standard")              # alert speed; older app versions don't send it
         if mode not in ("standard", "fast"):
             return self._send(400, {"error": "mode must be 'standard' or 'fast'"})
-        toks = push_fcm.save_token(token.strip(), stations, str(sub.get("name", "")).strip(), mode)
+        caps = [c for c in sub.get("caps", []) if c in ("local_text",)] if isinstance(sub.get("caps"), list) else []
+        toks = push_fcm.save_token(token.strip(), stations, str(sub.get("name", "")).strip(), mode, caps)
         self._send(200, {"ok": True, "count": len(toks)})
 
     def _unregister_push(self, sub):

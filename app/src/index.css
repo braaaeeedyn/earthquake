@@ -343,6 +343,12 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .recent-list .place { color: var(--body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-list .r { font-family: var(--font-mono); font-size: 12px; color: var(--mute); }
 /* live-pipeline match under a USGS quake: filled pill = caught, outline = seen, muted text = not caught */
+.home-shaking { margin: -4px 0 9px 66px; font-size: 12px; color: var(--charcoal); }
+.home-note { font-size: 13px; color: var(--charcoal); margin: var(--space-3) 0 0; }
+.quake-detail h1 { margin-top: var(--space-2); }
+.mmi-card { margin-top: var(--space-3); display: grid; gap: var(--space-2); }
+.mmi-big { font-family: var(--display); font-size: var(--fs-h2); font-weight: 600; }
+.mmi-big span { font-family: var(--font-mono); font-size: 14px; color: var(--body); margin-left: var(--space-2); }
 .caught { margin: -2px 0 9px 66px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; display: inline-block; }
 .caught-yes { background: var(--ink); color: var(--canvas); border-radius: 9999px; padding: 2px 10px; }
 .caught-seen { border: 1px solid var(--hairline); color: var(--body); border-radius: 9999px; padding: 1px 10px; }

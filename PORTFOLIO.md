@@ -92,16 +92,22 @@ SeedLink (19 stations, real time) ─► per-station buffers ─► data-quality
 ## 5. Proving it works on real days (the acceptance test)
 
 Test AUC alone doesn't say whether a live system can be trusted, so the acceptance test is a **replay**:
-the exact live engine runs over 10 archived days it never trained or calibrated on.
+the exact live engine runs over **80 archived days** (2022–2026) it never trained or calibrated on: 60 days with an
+M3+ quake in coverage and 20 random days.
 
-| Replay result (10 held-out days) | |
+| Replay result (80 held-out days) | |
 |---|---|
-| Confirmed events that were real quakes | **93%** (time-shifted chance baseline: 0%) |
-| Push alerts | **5, none false** (the system it replaced sent 6 on the same days, all false) |
-| Median location error | **2.5 km** |
-| Pushed magnitudes vs catalogue | within 0.13 |
-| Provisional push (Standard / Fast) / confirmed push | ~33 s / ~26 s / ~55 s after origin |
-| In-coverage catch rate | 81% at M2–2.5, 75% at M2.5–3, 86% at M3+ |
+| Push alerts | **145**, every one a real quake; 92% placed within 60 km (the other 12 were out-of-network quakes located 63–145 km off). Time-shifted chance baseline: 0% |
+| Pushed magnitudes vs catalogue | bias +0.05, MAE 0.12 |
+| Confirmed events that were real quakes | 86% busy days / 79% random days (chance 4% / 0%) |
+| Median location error | **3–4 km** |
+| First message (Standard / Fast) / confirmation | ~31 s / ~25 s / ~50 s after origin |
+| Catch rate | **68%** of M3+ (95% CI 60–74%); 78% outside aftershock swarms with ≥3 stations online; 52% of M2+ |
+
+The misses are concentrated in aftershock swarms (30% caught vs 73% for isolated M2+ quakes), where a
+second quake within two minutes is absorbed into the first. A smaller 10-day check had suggested 86% at M3+
+with zero false pushes; the larger test is the honest number. The system it replaced sent 6 pushes on 4 of those
+days, all false.
 
 The thresholds (trigger level, pick SNR, misfit, station count) were calibrated on **separate validation days**.
 Every live and replay precision is reported next to a chance baseline. After deployment the system ran in
@@ -109,6 +115,13 @@ Every live and replay precision is reported next to a chance baseline. After dep
 against USGS before alerts are switched on.
 
 ## 6. Engineering highlights
+
+- **Shaking at your home, without sending your home anywhere.** For every quake the app estimates the Modified
+  Mercalli intensity at the user's saved home: a ground-motion equation fitted on our own 25k station records,
+  a USGS Vs30 ground-type term, a per-quake correction from how hard it actually shook our sensors, and an
+  offset calibrated on USGS "Did You Feel It?" reports. Held out on 28 later quakes (1,892 report cells): MAE
+  0.42 levels, 94% within one level. The same equations run on the server, in the web app and in native
+  Android code that writes the notification, and the location never leaves the phone.
 
 - **One station list** (`network.py`) is imported by the dataset builder, the daemon, the API, the scorer
   and the replay harness. An earlier version had drifted apart and silently ran on 5 stations instead of 10.
