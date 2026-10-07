@@ -269,4 +269,10 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check
   with more quakes or point (not 10 km cell) data before claiming it helps.
 - **Swarm misses** are the biggest catch-rate loss (HOW_IT_WORKS §6.3–6.4); see the swarm-tuning result there.
+  Sweep (2026-10-07, validation days only, `data/processed/v2/replay/swarmtune/`: `sweep.py`, `run_swarmtune.ps1`,
+  results `sweep_results.csv`, log ends "ALL DONE"): event_sep_s {120,90,60,30} × refractory {60,45,30,20} ×
+  split_picks. Baseline (live: 120/60/no split) = catch M2+ 32.4 %, M3+ 40 %, precision 0.765, 0 duplicates,
+  13.3 quiet false/week. Adopt a config only if catch rises without more duplicates or quiet false/week; then set it
+  in `data/processed/v2/pipeline_config.json`, confirm on the 80-day test once (detection-only `replay_archive.py run`),
+  scp to the VM + restart, document in HOW_IT_WORKS §6.4.
 - Drift reference has only ~280–650 training noise windows per station; if `watch` flaps, grow `NOISE_TIMES`.
