@@ -19,7 +19,7 @@ type State =
 const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
-    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 80 held-out days it caught about 7 in 10 quakes of M3 and up (about 8 in 10 outside busy aftershock sequences). Every alert it sent was for a real quake, though about 1 in 12 was placed more than 60 km off.',
+    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 80 held-out days it caught about 7 in 10 quakes of M3 and up (about 8 in 10 outside busy aftershock sequences). Every alert it sent was for a real quake.',
     tech: [
       'Input: the vertical channel of each station, 30 s at 100 Hz, causally band-limited (1 Hz high-pass, 18 Hz low-pass) and scaled to unit variance — the same preparation in training and live.',
       'Model: 4 strided 1-D convolutions (16→64 channels) turn the trace into a feature sequence; a 2-layer Transformer encoder reads it and a linear head gives P(earthquake). Selected from 5 seeds on validation AUC.',
@@ -900,6 +900,10 @@ function CatchNotes() {
             <ol>
               <li>About <b>7 in 10 quakes of M3 and up</b> were caught (68%); about 8 in 10 outside busy aftershock
                 sequences with enough sensors online (78%). About half of M2+ quakes (52%), and few below M2.</li>
+              <li><b>Where the M3+ misses were</b> (58 of 179): 27 came within two minutes of another quake nearby, in
+                aftershock sequences (what the October fix below targets); 16 happened while nearby sensors were missing
+                from the archive; 15 were where coverage is thin, with the second and third nearest sensors 70–100 km away
+                (mostly the Imperial Valley). It didn’t miss the biggest: all 3 quakes of M5 and up were caught.</li>
               <li><b>Every one of its 145 alerts was a real quake.</b> 92% were placed within 60 km; the other 12 were
                 outside the network and placed 63–145 km off.</li>
               <li>Sizes were within 0.12 magnitude units on average; median location error 3–4 km.</li>

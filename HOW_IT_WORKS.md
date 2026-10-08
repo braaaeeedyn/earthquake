@@ -459,6 +459,11 @@ Where the misses are:
   absorbed into the earlier event by design (§5.2). Tuning for this: §6.4.
 - **Stations down.** On some archive days several stations have no data (Apr 16 2024: 5 down). With ≥ 3
   stations online and outside the echo window, M3+ catch is **78%**.
+- **All 58 M3+ misses, classified** (`replay/bigtest/misses.py` → `misses.json`; first matching reason): 27 back-to-back
+  (12 inside the 120 s echo window of a confirmed event, 15 within 2 min of another catalogued M2+ nearby), 16 with
+  fewer than 3 stations online in the archive, 7 seen but not confirmed, 8 not seen at all. 13 of those last 15 sit
+  where coverage is thinnest: second and third nearest stations 70–100 km away (Imperial Valley / Salton Sea). By
+  size: M3–3.5 66% caught, M3.5–4 74%, M4–5 6 of 12, M5+ 3 of 3.
 - Below M2 is outside the magnitude training range; those quakes size slightly high (around M2), still below
   the push floor.
 
