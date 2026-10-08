@@ -294,8 +294,8 @@ runs these steps:
    - a lone glitch spike.
 3. Score it with the detector.
 4. **Trigger:** if P(quake) ≥ **0.6**, pick the P onset in the window. Keep the pick if SNR ≥ 3.
-5. **Refractory:** after a pick, that station isn't picked again for 60 s. This stops S-waves and
-   coda being picked as new P arrivals.
+5. **Refractory:** after a pick, that station isn't picked again for 45 s (60 s before the 2026-10-07 swarm
+   tuning, §6.4). This stops S-waves and coda being picked as new P arrivals.
 
 ### 5.2 Locate and confirm (`associate`)
 
@@ -310,8 +310,8 @@ runs these steps:
      silent. A real quake reaches nearer stations first; with exactly 3 picks the fit is exactly
      determined, so this negative evidence is what rejects coincident noise;
    - the nearest picking station is within 120 km.
-4. **Duplicates:** a new solution within 120 s and 100 km of an already-declared event is treated as
-   that event's later phases or coda, and its picks are absorbed.
+4. **Duplicates:** a new solution within 30 s and 100 km of an already-declared event is treated as
+   that event's later phases or coda, and its picks are absorbed (120 s before the swarm tuning, §6.4).
 5. **TENTATIVE:** picks still unused after 40 s become a tentative declaration (1–2 stations, or no
    consistent fit). These are logged and **never** pushed.
 
@@ -467,6 +467,37 @@ The earlier **10-day held-out check** (Oct 2–5 + Aug 18–25 2026) looked bett
 Event-centric test (833 test quakes, live geometry): located 89%, median location error 3.8 km, magnitude MAE
 0.135 (bias +0.08).
 
+
+### 6.4 Swarm tuning (2026-10-07)
+
+The 80-day test showed most misses inside aftershock swarms. Two settings made a second quake disappear: the **echo
+window** (`event_sep_s`: a new event closer than this in time and 100 km in space to a declared one is treated as
+its coda) and the **station rest period** (`refractory`: no new pick at a station this soon after its last one).
+A third option, **pick splitting** (`split_picks`: when a window's picks fit no single source, try time-sliced
+subsets), targets two quakes overlapping in one window.
+
+- **Sweep on validation days only** (`replay/swarmtune/sweep.py`): echo window {120, 90, 60, 30 s} × rest {60, 45,
+  30, 20 s} × splitting {off, on} = 32 configs, detection-only replay of 12 swarm days (Ridgecrest Jul 7–11 2019 and
+  7 others) and 10 quiet days. Scored on catch rate (catalogued M2+ in coverage with ≥ 3 stations online),
+  duplicates (one quake declared twice) and false confirmed events per week on quiet days.
+- **Rule:** adopt only a config that raises catch with no more duplicates and no more quiet-day false detections.
+
+| Validation swarm days | before (120 s / 60 s) | **adopted (30 s / 45 s, no splitting)** |
+|---|---|---|
+| M2+ caught | 32.4% | **45.4%** |
+| M3+ caught | 40.0% | **59.1%** |
+| confirmed events that are real | 76.5% | 75.2% |
+| duplicates | 0 | 0 |
+| false confirmed / week, quiet days | 13.3 | 13.3 |
+
+Higher-catch configs exist (30 s / 20 s with splitting: 84% of M3+), but every one with a rest ≤ 30 s or with
+splitting adds quiet-day false detections (14–22 / week) or duplicates, so they were rejected.
+
+**Scored once on the 80 held-out days** (`replay/swarmtune/verify_test.py`, detection-only, 565 M2+ / 147 M3+
+quakes with ≥ 3 stations online): M3+ caught **71.4% → 78.2%**, M2+ 51.2% → 55.2%, confirmed precision 85.4% →
+84.2%, duplicates 0 → 0, false confirmed on random days 7.35 → 7.70 / week (one extra event in 20 days, logged
+only). Live since 2026-10-07 (`pipeline_config.json`; reason in `pipeline_config_reason.json`). `split_picks`
+stays in the code, off. The §6.3 table above was measured before this change.
 
 ---
 

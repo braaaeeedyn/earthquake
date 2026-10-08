@@ -105,7 +105,9 @@ M3+ quake in coverage and 20 random days.
 | Catch rate | **68%** of M3+ (95% CI 60–74%); 78% outside aftershock swarms with ≥3 stations online; 52% of M2+ |
 
 The misses are concentrated in aftershock swarms (30% caught vs 73% for isolated M2+ quakes), where a
-second quake within two minutes is absorbed into the first. A smaller 10-day check had suggested 86% at M3+
+second quake within two minutes was absorbed into the first. Tuning that window and the station rest
+period on validation swarms, then scoring once on the 80 test days, raised M3+ catch from 71% to 78%
+(detection-only scoring) with no duplicates and precision 85% → 84%. A smaller 10-day check had suggested 86% at M3+
 with zero false pushes; the larger test is the honest number. The system it replaced sent 6 pushes on 4 of those
 days, all false.
 

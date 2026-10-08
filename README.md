@@ -84,7 +84,9 @@ once on held-out days.
 | first message / confirmation | Standard ~31 s, Fast ~25 s / ~50 s after origin |
 
 The first 10-day check (Oct 2–5 + Aug 18–25 2026: 93 % real, 5 pushes / 0 false, 4 of 5 M3+ caught) was too
-small to quote. On Oct 2–5 the **old** daemon pushed 6 alerts, **all false**, with a 37 km station-proxy
+small to quote. **Swarm tuning** (2026-10-07; echo window 120 → 30 s, station rest 60 → 45 s, chosen on
+validation swarms) then raised 80-day M3+ catch 71 → 78 % (detection-only scoring), precision 85 → 84 %,
+no duplicates; HOW_IT_WORKS §6.4. On Oct 2–5 the **old** daemon pushed 6 alerts, **all false**, with a 37 km station-proxy
 location error. Event-centric test on 833 held-out events (live geometry): magnitude bias **+0.08**,
 MAE 0.135, median location error 3.8 km.
 

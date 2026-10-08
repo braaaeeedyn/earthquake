@@ -166,8 +166,9 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   Both run per event (`EARLY_PROFILES`); 20-day variant test in HOW_IT_WORKS §5.3; (2) after full sizing, a confirmation if
   M >= 3.0, else a retraction if (1) went out. Both carry the tag `quake-<event id>` so (2) replaces (1).
   Rationale + validation numbers: `data/processed/v2/pipeline_config_reason.json`, README.
-- Coda of a big quake can re-trigger: picks within 120 s / 100 km of a declared event are absorbed
-  (costs: an aftershock inside that window is only logged as tentative).
+- Coda of a big quake can re-trigger: picks within 30 s / 100 km of a declared event are absorbed; station rest 45 s
+  (swarm tuning 2026-10-07, was 120 s / 60 s; HOW_IT_WORKS §6.4: 80-day M3+ catch 71.4 → 78.2 %, precision
+  85.4 → 84.2 %, 0 duplicates). `split_picks` exists in the code but is off (adds false detections).
 
 ### Shaking at your location (MMI, 2026-10-07; HOW_IT_WORKS §13)
 - `src/eq/shaking.py` = the one model: log10 PGV = a + bM + c log R + dR + e log(Vs30/631) + event_term
@@ -241,6 +242,8 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   automatically when FCM answers UNREGISTERED on the next push.
 - **Both alert-speed profiles running** (`early_mag_T2.json` copied 2026-10-06; daemon log: `alert-speed profiles: ['fast', 'standard']`).
 - **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
+- **Swarm-tuned config live (2026-10-07 ~19:40 PDT):** `pipeline_config.json` event_sep_s 30, refractory 45
+  (scp'd, sha256 verified). The shadow-mode precision check should cover days after this change.
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
 - **MMI feature (2026-10-07):** server side deployed with `main` (shaking.py, /api/shaking-model, data fields on
   pushes, v2 `shaking_calibration.json` scp'd, sha256 verified); website shows home shaking. The native
@@ -268,11 +271,4 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   in `live_watch.push_message`; the native app prepends its own home-shaking line.
 - **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check
   with more quakes or point (not 10 km cell) data before claiming it helps.
-- **Swarm misses** are the biggest catch-rate loss (HOW_IT_WORKS §6.3–6.4); see the swarm-tuning result there.
-  Sweep (2026-10-07, validation days only, `data/processed/v2/replay/swarmtune/`: `sweep.py`, `run_swarmtune.ps1`,
-  results `sweep_results.csv`, log ends "ALL DONE"): event_sep_s {120,90,60,30} × refractory {60,45,30,20} ×
-  split_picks. Baseline (live: 120/60/no split) = catch M2+ 32.4 %, M3+ 40 %, precision 0.765, 0 duplicates,
-  13.3 quiet false/week. Adopt a config only if catch rises without more duplicates or quiet false/week; then set it
-  in `data/processed/v2/pipeline_config.json`, confirm on the 80-day test once (detection-only `replay_archive.py run`),
-  scp to the VM + restart, document in HOW_IT_WORKS §6.4.
 - Drift reference has only ~280–650 training noise windows per station; if `watch` flaps, grow `NOISE_TIMES`.
