@@ -165,7 +165,7 @@ ever changes, subscribers following a retired station must be moved to a remaini
 - **Shaking model (MMI):** after `calibrate_shaking.py` + `validate_mmi.py`, scp
   `data/processed/shaking_calibration.json` to the VM (gitignored, so CI does not carry it) and restart;
   `curl -s localhost:8000/api/shaking-model` should show the new `mmi_offset`. `app/public/vs30_socal.json`
-  ships with the site build. The native notification text needs APK 2.01.00 (`app/native/android/README.md`).
+  ships with the site build. The native notification text needs APK 2.01.00 (`app/native/android/README.md`, built on the PC).
 - **Station health:** `curl -s localhost:8000/api/status` lists each station's up/latency. A station
   can drop off the public SeedLink relay (SCZ2 did during selection); the pipeline works with those
   that stream.

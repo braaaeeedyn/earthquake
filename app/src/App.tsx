@@ -866,6 +866,61 @@ function CaughtBadge({ c }: { c: NonNullable<UsgsEvent['caught']> }) {
   return <p className="caught caught-no">Not caught by our model</p>
 }
 
+// Under the quake list: why a quake can be seen but not confirmed, and how often quakes are caught
+// (80 held-out replay days + the 2026-10-07 swarm tuning; HOW_IT_WORKS.md sections 6.3-6.4).
+function CatchNotes() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className={`evidence ${open ? 'open' : ''}`}>
+      <button className="evidence-summary" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        What the marks mean
+      </button>
+      <div className="evidence-wrap">
+        <div className="evidence-inner">
+          <div className="evidence-tech">
+            <p className="evidence-tech-h">Why a quake can be seen but not confirmed</p>
+            <p>
+              “Seen” means at least one sensor picked up the quake, but it didn’t pass the checks that make a detection
+              trustworthy enough to alert on. Usually the quake was small, but not always. A quake is confirmed only when:
+            </p>
+            <ol>
+              <li><b>At least 3 sensors pick it up.</b> The most common miss. A small quake stands out from background
+                noise only at the nearest one or two sensors, which are tens of kilometres apart.</li>
+              <li><b>Their timings point to one place</b> (within 1.5 s). Two quakes overlapping, or one mistimed pick,
+                breaks this.</li>
+              <li><b>No more than one working sensor closer to it stayed quiet.</b> A real quake reaches nearer sensors
+                first; this rule throws out noise that hits three sensors by coincidence, and occasionally a real small quake.</li>
+              <li><b>The nearest sensor that picked it is within 120 km.</b> Quakes outside the network (north of
+                Ridgecrest, south of the border) can fail this.</li>
+              <li><b>It isn’t within 30 seconds and 100 km of a quake already declared</b>, which is treated as that
+                quake’s echo. In busy aftershock sequences this can hide a second quake.</li>
+            </ol>
+            <p className="evidence-tech-h">How often it catches quakes</p>
+            <p>The exact live code, replayed on 80 days of archived data from 2022–2026 that it never trained on:</p>
+            <ol>
+              <li>About <b>7 in 10 quakes of M3 and up</b> were caught (68%); about 8 in 10 outside busy aftershock
+                sequences with enough sensors online (78%). About half of M2+ quakes (52%), and few below M2.</li>
+              <li><b>Every one of its 145 alerts was a real quake.</b> 92% were placed within 60 km; the other 12 were
+                outside the network and placed 63–145 km off.</li>
+              <li>Sizes were within 0.12 magnitude units on average; median location error 3–4 km.</li>
+              <li>About 7 detections a week on ordinary days don’t match a catalogued quake. Those are logged, never sent.</li>
+            </ol>
+            <p className="evidence-tech-h">The aftershock fix (October 2026)</p>
+            <p>
+              Most misses were in aftershock swarms, where a second quake arrived before the system was ready for it. We tried
+              32 combinations of the echo window, the rest time each sensor takes after a pick, and splitting overlapping
+              detections, on separate tuning days only. The best that added no false detections and no double counts was a
+              <b> 30-second echo window (was 120 s) and a 45-second sensor rest (was 60 s), without splitting</b>. Checked once
+              on the 80 days, it raised M3+ catches from 71% to 78% (counting quakes with 3+ sensors online), with no quake
+              counted twice and real-detection rate 85% → 84%.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const CA_WINDOWS = [
   { key: 'day', label: 'Day' },
   { key: 'week', label: 'Week' },
@@ -972,6 +1027,7 @@ function CaLargest() {
           Next<Arrow dir="right" />
         </button>
       </div>
+      <CatchNotes />
     </section>
   )
 }

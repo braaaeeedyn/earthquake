@@ -48,3 +48,6 @@ data/subscribers.json
 app/android/app/google-services.json
 fcm-service-account.json
 data/processed/push_tokens.json
+
+# Android build inputs copied from the other device (signing key, Firebase config)
+other device/

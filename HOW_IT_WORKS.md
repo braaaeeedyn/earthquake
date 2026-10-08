@@ -782,7 +782,7 @@ Errors are flat with distance (0.45 / 0.42 / 0.41 at 0–50 / 50–100 / 100+ km
   station's Vs30), for the push wording that every app version receives.
 - App (`shaking.ts`): `loadShakingModel()` fetches `/api/shaking-model` + `vs30_socal.json` at start and caches
   the model in Preferences; `homeShaking(lat, lon, mag, term)` gives the line under each quake and the quake page.
-- Native Android (`app/native/android/`, APK **2.01.00**, built on the other device): `QuakeMessagingService`
+- Native Android (`app/native/android/`, APK **2.01.00**, built on the PC): `QuakeMessagingService`
   receives the data-only push, reads `seismic.home` + `seismic.shaking_model` from Capacitor Preferences and
   writes "Light shaking likely at Pasadena (MMI IV, 34 km)" above the server's text. Any error falls back to the
   server's text. `QuakeNativePlugin` is a marker: the JS registers `caps: ["local_text"]` only when it exists, so

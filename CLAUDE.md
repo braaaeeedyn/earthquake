@@ -225,6 +225,11 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - Shaking levels round half UP everywhere (Python `math.floor(x+0.5)`, JS/Java `Math.round`); Python's `round`
   is banker's rounding and once disagreed with the app at MMI 2.5.
 - The VM has a stray `x.ai/DESIGN.md` folder (Jul 7, a design reference); harmless, not part of the app.
+- **Android builds happen on THIS PC now** (moved from the other device 2026-10-07): real project in `app/android/`
+  (gitignored; `com.seismicsocal`), Firebase `google-services.json` inside it, signing key `~/.android/debug.keystore`
+  (SHA-256 7dd3cbc8…; originals + the project zip in gitignored `other device/`). Never commit or lose the keystore.
+  `build_apk.sh` handles Node 20 (Capacitor 8 needs 22 → npx node@22 for cap sync) and Anaconda's cygpath.
+  The app module needs `firebase-messaging:25.0.1` declared itself (QuakeMessagingService).
 - MLflow prints emoji; `tracking.run` makes stdout tolerant (a cp1252 console used to crash at run end).
 - Low RAM: a local `mlflow server` + training at the same time can get reaped.
 - Deploys (tar) never delete files: CI removes server files git no longer tracks under scripts/src/tests before
@@ -247,7 +252,7 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
 - **MMI feature (2026-10-07):** server side deployed with `main` (shaking.py, /api/shaking-model, data fields on
   pushes, v2 `shaking_calibration.json` scp'd, sha256 verified); website shows home shaking. The native
-  notification text needs **APK 2.01.00** (`app/native/android/README.md`), not built yet.
+  notification text needs **APK 2.01.00** (built here 2026-10-07, not shipped yet).
 - **QuakeOps live on the VM (2026-10-06):** `mlflow.service` (registry, `https://mlflow.seismicsocal.duckdns.org`,
   basic auth user `quakeops`); detector + magnitude registered as v1 `@champion`; `seismicsocal-quakeops.timer`
   (09:30 UTC) pulls the champion (`QUAKEOPS_AUTO_DEPLOY=0`) and runs the drift check; `/health` shows both models.
@@ -263,10 +268,10 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
   10 replay days), then schedule monthly (Dagster schedule or the Task Scheduler entry in DEPLOY.md step 9).
-- **APK 2.01.00 (other device):** follow `app/native/android/README.md` (copy the two Java files, register the
-  plugin, swap the messaging service in the manifest, `npm install && npx cap sync`, version 2.01.00, build, test
-  that push_tokens.json shows `caps: ["local_text"]`), then raise `APP_LATEST_VERSION` to 2.01.00 (soft notice).
-  The Java was written blind (no Firebase project on this PC) — expect a compile fix or two.
+- **APK 2.01.00: BUILT on this PC (2026-10-07), not yet phone-tested or shipped.** `app/public/seismicsocal.apk`
+  (com.seismicsocal, versionCode 3, same debug key as 2.00.00 → installs as an update). Test on a phone (home line in
+  the notification, `caps: ["local_text"]` in push_tokens.json), then scp it to the VM and raise
+  `APP_LATEST_VERSION` to 2.01.00 (`app/native/android/README.md`).
 - **Push wording is too long** (user, 2026-10-06): shorter alternatives were drafted, none chosen yet. Wording lives
   in `live_watch.push_message`; the native app prepends its own home-shaking line.
 - **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check

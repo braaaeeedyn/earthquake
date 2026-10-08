@@ -35,10 +35,17 @@ echo "==> [1/4] Building web app (Vite)"
 npm run build
 
 echo "==> [2/4] Syncing web build into the Android project (cap sync)"
-npx cap sync android
+# Capacitor 8's CLI needs Node >= 22; on an older system Node, run just this step on Node 22 (npm's `node` package).
+if [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ]; then npx cap sync android
+else npx -y -p node@22 -- node node_modules/@capacitor/cli/bin/capacitor sync android; fi
 
 echo "==> [3/4] Assembling debug APK (JDK 21 pinned in gradle.properties)"
-( cd android && ./gradlew assembleDebug --no-daemon )
+# The wrapper needs a JDK too: default to Android Studio's bundled one. Git's own /usr/bin goes first on PATH,
+# because Anaconda's cygpath (if on PATH) mangles the wrapper's paths.
+if [ -z "${JAVA_HOME:-}" ] && [ -d "/c/Program Files/Android/Android Studio/jbr" ]; then
+  export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
+fi
+( cd android && PATH="/usr/bin:$PATH" ./gradlew assembleDebug --no-daemon )
 
 echo "==> [4/4] Staging APK for the /app download page"
 APK="$ROOT/app/android/app/build/outputs/apk/debug/app-debug.apk"
