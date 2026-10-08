@@ -252,7 +252,7 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
 - **MMI feature (2026-10-07):** server side deployed with `main` (shaking.py, /api/shaking-model, data fields on
   pushes, v2 `shaking_calibration.json` scp'd, sha256 verified); website shows home shaking. The native
-  notification text needs **APK 2.01.00** (built here 2026-10-07, not shipped yet).
+  notification text needs **APK 2.01.00** (released on /app 2026-10-07).
 - **QuakeOps live on the VM (2026-10-06):** `mlflow.service` (registry, `https://mlflow.seismicsocal.duckdns.org`,
   basic auth user `quakeops`); detector + magnitude registered as v1 `@champion`; `seismicsocal-quakeops.timer`
   (09:30 UTC) pulls the champion (`QUAKEOPS_AUTO_DEPLOY=0`) and runs the drift check; `/health` shows both models.
@@ -268,10 +268,10 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
   10 replay days), then schedule monthly (Dagster schedule or the Task Scheduler entry in DEPLOY.md step 9).
-- **APK 2.01.00: BUILT on this PC (2026-10-07), not yet phone-tested or shipped.** `app/public/seismicsocal.apk`
-  (com.seismicsocal, versionCode 3, same debug key as 2.00.00 → installs as an update). Test on a phone (home line in
-  the notification, `caps: ["local_text"]` in push_tokens.json), then scp it to the VM and raise
-  `APP_LATEST_VERSION` to 2.01.00 (`app/native/android/README.md`).
+- **APK 2.01.00 RELEASED 2026-10-07 (soft update; LATEST 2.01.00, MIN 2.00.00), user testing it from the site.**
+  Built on this PC, same debug key as 2.00.00 (installs over it). Not phone-tested before release: confirm
+  push_tokens.json shows `caps: ["local_text"]` for the user's device and that a quake push shows the home-shaking
+  line. Rollback: VM `app/dist/seismicsocal-2.00.00.apk.bak` → `seismicsocal.apk`, LATEST back to 2.00.00.
 - **Push wording is too long** (user, 2026-10-06): shorter alternatives were drafted, none chosen yet. Wording lives
   in `live_watch.push_message`; the native app prepends its own home-shaking line.
 - **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check
