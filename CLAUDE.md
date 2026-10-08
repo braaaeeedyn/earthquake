@@ -99,8 +99,8 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Replay harness (the acceptance test), 80 held-out days** (2022-04..2026-08, `data/processed/v2/replay/bigtest/`):
   145 pushes, all real quakes, 92 % within 60 km (12 out-of-network quakes mislocated 63–145 km, all 3-station);
   pushed mag bias +0.05 / MAE 0.12; confirmed precision 86 % busy / 79 % random days (chance 4 / 0 %), 7.4 false
-  confirmed/week (logged only); median loc err 3–3.6 km; catch M3+ 68 % (CI 60–74), 78 % with ≥3 stations up and
-  outside echo windows, M2+ 52 %; swarms 30 % vs isolated 73 %; 0 of 75 quakes inside the 120 s echo window caught.
+  confirmed/week (logged only); median loc err 3–3.6 km; catch M3+ 68 % (CI 60–74); with ≥3 stations online: isolated M3+ 83 %
+  (86 % good coverage / 80 % thin, 2nd-nearest station > 60 km) vs 60 % in sequences (`bigtest/misses.py`); M2+ 52 %; swarms 30 % vs isolated 73 %; 0 of 75 quakes inside the 120 s echo window caught.
   Timing: Standard ~31 s, Fast ~25 s, confirmation ~50 s. (Old 10-day check, 93 % / 0 false, was too small.)
 
 ### Locked rules — do not change without asking
@@ -252,7 +252,7 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
 - **MMI feature (2026-10-07):** server side deployed with `main` (shaking.py, /api/shaking-model, data fields on
   pushes, v2 `shaking_calibration.json` scp'd, sha256 verified); website shows home shaking. The native
-  notification text needs **APK 2.01.00** (released on /app 2026-10-07).
+  notification text needs **APK 2.01.00+** (2.01.01 on /app since 2026-10-07).
 - **QuakeOps live on the VM (2026-10-06):** `mlflow.service` (registry, `https://mlflow.seismicsocal.duckdns.org`,
   basic auth user `quakeops`); detector + magnitude registered as v1 `@champion`; `seismicsocal-quakeops.timer`
   (09:30 UTC) pulls the champion (`QUAKEOPS_AUTO_DEPLOY=0`) and runs the drift check; `/health` shows both models.
@@ -268,10 +268,13 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
   10 replay days), then schedule monthly (Dagster schedule or the Task Scheduler entry in DEPLOY.md step 9).
-- **APK 2.01.00 RELEASED 2026-10-07 (soft update; LATEST 2.01.00, MIN 2.00.00), user testing it from the site.**
+- **APK 2.01.01 RELEASED 2026-10-07 (soft update; LATEST 2.01.01, MIN 2.00.00), user testing it from the site.**
+  2.01.00 = native home-shaking notifications; 2.01.01 = same + updated accuracy text (the APK bundles the site).
   Built on this PC, same debug key as 2.00.00 (installs over it). Not phone-tested before release: confirm
   push_tokens.json shows `caps: ["local_text"]` for the user's device and that a quake push shows the home-shaking
-  line. Rollback: VM `app/dist/seismicsocal-2.00.00.apk.bak` → `seismicsocal.apk`, LATEST back to 2.00.00.
+  line. Rollback: VM `app/dist/seismicsocal-2.01.00.apk.bak` (or `-2.00.00.apk.bak`) → `seismicsocal.apk`, and
+  LATEST back. Release steps: bump `version.ts` + `app/android/app/build.gradle` + server LATEST, `build_apk.sh`,
+  scp the APK to `app/dist/` (CI never ships .apk files).
 - **Push wording is too long** (user, 2026-10-06): shorter alternatives were drafted, none chosen yet. Wording lives
   in `live_watch.push_message`; the native app prepends its own home-shaking line.
 - **Vs30 site term** gave no measurable gain on DYFI (MAE 0.40 without vs 0.42 with). Kept for physics; re-check

@@ -80,7 +80,7 @@ once on held-out days.
 | pushed size vs catalog | bias +0.05, MAE 0.12, 89 % within 0.3 |
 | confirmed events that are real | 86 % busy days / 79 % random days (chance 4 % / 0 %); 7.4 false confirmations/week, logged only |
 | location error (median) | 3.0–3.6 km |
-| catch rate | M3+ **68 %** (CI 60–74 %), 78 % with ≥3 stations up and outside aftershock echo windows; M2+ 52 % |
+| catch rate | M3+ **68 %** (CI 60–74 %); with ≥3 stations up: isolated M3+ **83 %** (86 % good coverage / 80 % thin) vs **60 %** inside sequences; M2+ 52 % |
 | first message / confirmation | Standard ~31 s, Fast ~25 s / ~50 s after origin |
 
 The first 10-day check (Oct 2–5 + Aug 18–25 2026: 93 % real, 5 pushes / 0 false, 4 of 5 M3+ caught) was too

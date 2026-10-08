@@ -19,14 +19,14 @@ type State =
 const ROWS: { n: string; kicker: string; key: string; q: string; figure: string; desc: string; tech: string[] }[] = [
   {
     n: '01', kicker: 'Detect', key: 'detection', q: 'Is it an earthquake?', figure: 'detect_evidence.png',
-    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 80 held-out days it caught about 7 in 10 quakes of M3 and up (about 8 in 10 outside busy aftershock sequences). Every alert it sent was for a real quake.',
+    desc: 'Every 2 seconds, each of the 19 live sensors hands the model its last 30 seconds of ground motion, and the model decides whether an earthquake is in it or just traffic, wind or sensor noise. A quake only counts when at least three sensors see it and their timings point to one place. On held-out data it separates quakes from noise almost perfectly, and replayed on 80 held-out days it caught about 7 in 10 quakes of M3 and up overall. With its sensors online, it caught over 8 in 10 isolated M3+ quakes, but fewer inside rapid aftershock sequences (6 in 10). Every alert it sent was for a real quake.',
     tech: [
       'Input: the vertical channel of each station, 30 s at 100 Hz, causally band-limited (1 Hz high-pass, 18 Hz low-pass) and scaled to unit variance — the same preparation in training and live.',
       'Model: 4 strided 1-D convolutions (16→64 channels) turn the trace into a feature sequence; a 2-layer Transformer encoder reads it and a linear head gives P(earthquake). Selected from 5 seeds on validation AUC.',
       'Training data: 34,377 event windows (P-wave placed anywhere 1–25 s into the window), 14,304 noise windows from all hours with no catalogued M1+ quake nearby, and 2,062 hard negatives — the previous live system’s own false alarms. Chronological split, 2000–2026.',
       'Held-out test (7,303 windows, 2022–2026): ROC-AUC 0.9998, MCC 0.886; the classic STA/LTA trigger on the same input reaches AUC 0.816.',
       'Live: a window above 0.6 triggers a P-wave pick (STA/LTA onset refined by an Akaike picker). Picks from ≥3 stations are located by grid search; the event is confirmed only if one source fits them (RMS ≤ 1.5 s) and no working station closer to it stayed silent.',
-      'Replay of the exact live code on 80 held-out days (2022–2026): 68 % of M3+ quakes caught (78 % outside aftershock sequences with ≥3 stations online), 52 % of M2+; 145 push alerts, every one a real quake, 92 % placed within 60 km; median location error 3–4 km.',
+      'Replay of the exact live code on 80 held-out days (2022–2026): 68 % of M3+ quakes caught; with ≥3 stations online, 83 % of isolated M3+ (86 % in good coverage, 80 % where it is thin) vs 60 % inside sequences; 52 % of M2+; 145 push alerts, every one a real quake, 92 % placed within 60 km; median location error 3–4 km.',
     ],
   },
   {
@@ -898,8 +898,12 @@ function CatchNotes() {
             <p className="evidence-tech-h">How often it catches quakes</p>
             <p>The exact live code, replayed on 80 days of archived data from 2022–2026 that it never trained on:</p>
             <ol>
-              <li>About <b>7 in 10 quakes of M3 and up</b> were caught (68%); about 8 in 10 outside busy aftershock
-                sequences with enough sensors online (78%). About half of M2+ quakes (52%), and few below M2.</li>
+              <li>About <b>7 in 10 quakes of M3 and up</b> were caught overall (68%), about half of M2+ quakes (52%), and
+                few below M2.</li>
+              <li><b>It depends on the situation.</b> With the nearby sensors online, it caught <b>83% of isolated M3+
+                quakes</b> (86% where sensors are close together, 80% where coverage is thin), but only 60% of M3+ quakes
+                inside rapid sequences, where a second quake follows within minutes. For most of those sequence misses,
+                a quake right next to it (often the bigger one) was caught, so that area still got an alert.</li>
               <li><b>Where the M3+ misses were</b> (58 of 179): 27 came within two minutes of another quake nearby, in
                 aftershock sequences (what the October fix below targets); 16 happened while nearby sensors were missing
                 from the archive; 15 were where coverage is thin, with the second and third nearest sensors 70–100 km away

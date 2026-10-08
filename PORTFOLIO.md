@@ -102,7 +102,7 @@ M3+ quake in coverage and 20 random days.
 | Confirmed events that were real quakes | 86% busy days / 79% random days (chance 4% / 0%) |
 | Median location error | **3–4 km** |
 | First message (Standard / Fast) / confirmation | ~31 s / ~25 s / ~50 s after origin |
-| Catch rate | **68%** of M3+ (95% CI 60–74%); 78% outside aftershock swarms with ≥3 stations online; 52% of M2+ |
+| Catch rate | **68%** of M3+ (95% CI 60–74%); with sensors online, **83%** of isolated M3+ quakes (86% in good coverage, 80% where thin) vs 60% inside rapid sequences; 52% of M2+ |
 
 The misses are concentrated in aftershock swarms (30% caught vs 73% for isolated M2+ quakes), where a
 second quake within two minutes was absorbed into the first. Tuning that window and the station rest

@@ -454,6 +454,11 @@ Catch rate (catalogued quakes in coverage, 95% event-bootstrap CI):
 | Caught | 9% | 29% | 41% | 60% | **68%** (60–74%) | 52% |
 
 Where the misses are:
+- **By situation (M3+, ≥ 3 stations online near the quake; `misses.py` `situations_3plus_online`):** isolated (no
+  other catalogued M2+ within 10 min / 50 km) **83%** (62 of 75) — 86% (30/35) in good coverage, 80% (32/40) where
+  coverage is thin (second-nearest station > 60 km) — vs **60%** (43/72) inside sequences. Small samples: the
+  good/thin split is not significant. For 28 of the 36 missed sequence quakes, a neighbour within 10 min / 50 km was
+  caught (19 times the same size or bigger), so the area was still alerted.
 - **Aftershock swarms.** Isolated M2+ quakes: 73% caught. Inside swarms (10+ quakes in 10 min): 30%.
   Quakes that start inside the 120 s echo window of an event already declared nearby: **0 of 75** — they are
   absorbed into the earlier event by design (§5.2). Tuning for this: §6.4.
