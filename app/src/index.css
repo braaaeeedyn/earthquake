@@ -44,6 +44,7 @@ body {
   font-family: var(--body-font);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  container-type: inline-size;   /* breakpoints are @container on this, so they follow the app's font-scale zoom (main.tsx) */
 }
 h1, h2, h3 { margin: 0; font-weight: 600; font-family: var(--display); line-height: 1.12; letter-spacing: -0.015em; text-wrap: balance; }
 p { margin: 0; }
@@ -84,7 +85,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .carousel-tab.on { color: var(--ink); opacity: 1; }
 .carousel-tab-n { font-size: 11px; opacity: 0.55; }
 /* keep the tab row on a single line on narrow phones (shrink instead of wrapping) */
-@media (max-width: 620px) {
+@container (max-width: 620px) {
   .carousel-tabs { gap: var(--space-3); flex-wrap: nowrap; }
   .carousel-tab { font-size: 12px; letter-spacing: 0.06em; gap: 5px; }
 }
@@ -116,12 +117,13 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .carousel-ctrl-icon { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; }
 .carousel-timer { font-family: var(--font-mono); font-size: 12px; color: var(--body); letter-spacing: 0.06em; min-width: 3.5ch; text-align: center; font-variant-numeric: tabular-nums; }
 .carousel-dots { display: flex; gap: 8px; }
-/* narrow phones (320-380 px): the control row must fit without scrolling the page sideways */
-@media (max-width: 380px) {
-  .carousel-controls { gap: 6px; }
-  .carousel-ctrl { padding: 8px 12px; }
+/* narrow phones (280-380 px, incl. large-font zoom): the control row must fit without scrolling the page sideways */
+@container (max-width: 380px) {
+  .carousel-controls { gap: 4px; }
+  .carousel-ctrl { padding: 8px 10px; }
   .carousel-timer { display: none; }
 }
+@container (max-width: 300px) { .carousel-dots { display: none; } }   /* the tab row above already marks the active panel */
 .dot-i { width: 7px; height: 7px; border-radius: 9999px; background: none; border: 1px solid var(--mute); transition: background 0.4s ease, border-color 0.4s ease, transform 0.4s ease; }
 .dot-i.on { background: var(--ink); border-color: var(--ink); transform: scale(1.15); }
 @media (prefers-reduced-motion: reduce) {
@@ -158,7 +160,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .health-table th, .health-table td { text-align: left; padding: var(--space-2) var(--space-2) var(--space-2) 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
 .health-table th { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); font-weight: 500; }
 /* keep the stat row on one line on phones — shrink the number/vs text instead of wrapping */
-@media (max-width: 620px) {
+@container (max-width: 620px) {
   .stat { gap: var(--space-3); }
   .stat-vs { font-size: 11px; }
 }
@@ -261,6 +263,18 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .speed-option.on .speed-desc, .speed-option.on .speed-when { color: color-mix(in srgb, #fff 80%, transparent); }
 .region-sensors { margin: var(--space-3) 0 var(--space-2) var(--space-6); }
 .station-row.subscribed .station-dist, .station-row.subscribed .station-toggle { color: var(--body); }
+/* phones: one-line region pills squeezed the name until it ran into "N sensors" - give the name its own
+   line (status wraps below only if it must), put City on its own line, and trim nested padding */
+@container (max-width: 620px) {
+  .nearme .card { padding: var(--space-4); }
+  .search-row { flex-wrap: wrap; }
+  .search-row input:not(.state-input) { flex-basis: 100%; }
+  .station-row { padding: 10px 16px; grid-template-columns: 3rem 1fr auto; }
+  .region-row { display: flex; flex-wrap: wrap; column-gap: var(--space-3); row-gap: 2px; border-radius: var(--card-radius); }
+  .region-name { flex-basis: 100%; }
+  .region-row .station-toggle { margin-left: auto; }
+  .region-sensors { margin-left: var(--space-4); }
+}
 .actions { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; margin-top: 6px; }
 .btn { font-family: var(--body-font); font-size: 14px; font-weight: 500; color: #fff; background: var(--ink); border: 1px solid var(--ink); border-radius: 9999px; padding: 10px 22px; cursor: pointer; }
 .btn:disabled { opacity: 0.5; cursor: default; }
@@ -332,7 +346,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .date-input:focus { outline: none; border-color: var(--ink); }
 .largest-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
 .qlist .eyebrow { display: block; margin-bottom: var(--space-3); }
-@media (max-width: 620px) { .largest-cols { grid-template-columns: 1fr; gap: var(--space-6); } }
+@container (max-width: 620px) { .largest-cols { grid-template-columns: 1fr; gap: var(--space-6); } }
 
 .recent-list { list-style: none; margin: 0; padding: 0; }
 .recent-list li { border-top: 1px solid var(--hairline); }

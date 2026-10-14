@@ -6,6 +6,10 @@ Preferences), so the location never leaves the device. A server only sends these
 registered the `local_text` capability. The app registers it only if the `QuakeNativePlugin` below is present, so
 older APKs keep getting normal notifications.
 
+**Font size.** The plugin also turns off the WebView's text-only scaling (`setTextZoom(100)`, which let large system
+fonts overflow the layout) and reports `fontScale`; `app/src/main.tsx` zooms the whole page by it instead, capped so the
+layout stays >= 280 CSS px wide. Width breakpoints in `index.css` are `@container` queries on `<body>` so they follow it.
+
 These two Java files are the source of truth; `app/android/` is gitignored, so they are copied into it.
 
 ## Where the Android project lives (2026-10-07)

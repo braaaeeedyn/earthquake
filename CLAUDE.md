@@ -222,6 +222,9 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   the real defaults are 30 s / 60 km.
 - `shaking_calibration.json` is gitignored data that ships by scp. `shaking.load()` falls back to the built-in v2
   coefficients if it finds the pre-v2 file (no `site` key) — the VM had that file until 2026-10-07.
+- **Width breakpoints are `@container (max-width: …)` on `<body>`, never `@media`.** In the Android app the system
+  font size is applied as a whole-page CSS zoom (`main.tsx` + `QuakeNativePlugin`), and `@media` would still see the
+  unzoomed screen width. Layout must hold down to 280 CSS px (the zoom cap).
 - Shaking levels round half UP everywhere (Python `math.floor(x+0.5)`, JS/Java `Math.round`); Python's `round`
   is banker's rounding and once disagreed with the app at MMI 2.5.
 - The VM has a stray `x.ai/DESIGN.md` folder (Jul 7, a design reference); harmless, not part of the app.
