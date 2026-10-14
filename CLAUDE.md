@@ -246,7 +246,8 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   reinstall; that wipes the app's stored subscription, so users must re-subscribe. Stale tokens are pruned
   automatically when FCM answers UNREGISTERED on the next push.
 - **Both alert-speed profiles running** (`early_mag_T2.json` copied 2026-10-06; daemon log: `alert-speed profiles: ['fast', 'standard']`).
-- **Shadow mode:** `PUSH_ENABLED=0` in the VM `.env` — detects, sizes and logs, sends NO pushes.
+- **Pushes ENABLED 2026-10-09 22:06 UTC** (`PUSH_ENABLED=1` in the VM `.env`; previous file at `.env.bak-2026-10-09`).
+  Shadow mode ran 2026-10-05 → 10-09. To turn off: set `PUSH_ENABLED=0`, `sudo systemctl restart seismicsocal`.
 - **Swarm-tuned config live (2026-10-07 ~19:40 PDT):** `pipeline_config.json` event_sep_s 30, refractory 45
   (scp'd, sha256 verified). The shadow-mode precision check should cover days after this change.
 - **Nightly crosscheck timer installed** (09:00 UTC) → `data/processed/crosscheck_report.json`.
@@ -261,9 +262,11 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   checkpoint sha256 on the VM (DEPLOY.md).
 
 ### Open TODOs
-- **Shadow mode → pushes (~2026-10-12):** read the nightly report; if `confirmed` precision is well above
-  its chance baseline and pushed magnitudes match USGS, set `PUSH_ENABLED=1` and restart. Replay predicts
-  ~7 confirmed/day — if live stays far below that, replay the same hours and compare.
+- **Pushes ON — re-check 2026-10-12:** rerun `crosscheck_events.py --log <VM events.jsonl> --since 2026-10-08T02:40`
+  + `data/processed/push_check/magcheck.py <log>` (confirmed vs USGS magnitude). 2026-10-09 check (1.8 days):
+  confirmed precision 0.88 (chance 0.00), ~9 confirmed/day, 1 push-eligible (3.02 vs USGS 3.16); magnitude bias
+  +0.37 / MAE 0.39 overall, driven by sub-M2 quakes (outside the M2+ training range; M>=2 subset ≈ +0.05 / 0.11).
+  The fast quick check over-reads small quakes (3.12 for an M1.8) → expect occasional fast-mode retractions.
 - **Out-of-network locations:** quakes north of MPM / south of the border are located with a one-sided
   station triple (e.g. a real M3.6 placed 66 km off); consider an azimuthal-gap flag in the push wording.
 - **First retrain (not run yet):** `retrain.py --month 2026-09 --dry-run` (~hours: fetch + 2 trainings + re-scan of
