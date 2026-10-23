@@ -48,17 +48,17 @@
       quakes are from 2021&ndash;2026.</li>
   <li><b>Magnitude vs distance:</b> most records are M&nbsp;3&ndash;4 at 50&ndash;200&nbsp;km. Only 7 training records are within
       5&nbsp;km and only 29 quakes are M&nbsp;5 or larger, so close, large quakes are outside the calibrated range.</li>
-  <li><b>DYFI check:</b> 57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones
-      were used to fit the offset; the 28 newer ones (1,892 cells) were used only for scoring.</li>
-  <li><b>0.42 is the mean absolute error</b> (|estimate &minus; DYFI| averaged over cells), not the signed error. The bias is
-      +0.14 and 94&nbsp;% of cells are within one level. The reference is USGS &ldquo;Did You Feel It?&rdquo; intensity in
-      10&nbsp;km cells with at least 3 responses, not ShakeMap or station intensities.</li>
+  <li><b>DYFI check:</b> 57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones were
+      used to fit the offset; the newer ones only for scoring: 1,868 cells from the 27 of them our stations recorded.</li>
+  <li><b>0.42 is the mean absolute error</b> (|estimate &minus; DYFI| averaged over cells), not the signed error. The bias is +0.06
+      and 93&nbsp;% of cells are within one level. The reference is USGS &ldquo;Did You Feel It?&rdquo; intensity in 10&nbsp;km
+      cells with at least 3 responses, not ShakeMap or station intensities.</li>
 </ul>
 
 <h2>Calibration</h2>
 <ul>
-  <li><b>The +0.76 offset</b> is the median of (DYFI &minus; model) over the 29 older quakes. The 28 test quakes were excluded,
-      and the offset was not changed after scoring.</li>
+  <li><b>The +0.43 offset</b> is the median of (DYFI &minus; model) over the 29 older quakes, with each quake&rsquo;s event correction
+      applied. The 28 test quakes were excluded, and the offset was not changed after scoring.</li>
   <li><b>Before and after,</b> on the 27 test quakes our stations recorded (1,868 cells):</li>
 </ul>
 <table>
@@ -67,9 +67,7 @@
 </table>
 <p class="cap">Bias = estimate &minus; DYFI. Intervals from a bootstrap that resamples whole quakes.</p>
 <ul>
-  <li><b>With the event correction, the offset is {{OFF_T}}</b> (D), fitted the same way on the 29 older quakes. The correction already removes part of the
-      underestimate, so 0.76 on top of it (D&prime;) would overestimate by about 0.4 levels.</li>
-  <li>Once the offset is refitted, the event correction does not improve the match to DYFI (C vs D). Its value is that it
+  <li>Against DYFI the event correction scores about the same as the setup without it (C vs D). Its value is that it
       cancels our own magnitude error: a 0.3 error in M moves the estimate by under 0.1 level with it, about 0.4 without.</li>
 </ul>
 
@@ -86,9 +84,9 @@
       needs centimetres per second, so the value is multiplied by 100.</li>
   <li><b>Weak shaking:</b> Worden&rsquo;s conversion from PGV to intensity is two straight lines, a gentle one for weak shaking
       (up to 3.4&nbsp;cm/s) and a steeper one above, and the result is capped between I and X. USGS ShakeMap adds a third line
-      for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.47 vs 0.42), so we left it
-      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking one shows
-      level II and the other level I; both read &ldquo;Not felt&rdquo;.</li>
+      for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.46 vs 0.42), so we left it
+      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking their
+      numbers differ slightly; both still show level I, &ldquo;Not felt&rdquo;.</li>
 </ul>
 
 </body>

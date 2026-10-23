@@ -144,12 +144,12 @@ Worden et al. (2012) converts PGV to MMI:</p>
 coefficients are a least-squares fit to log<sub>10</sub>&nbsp;PGV of every training record (<code>scripts/calibrate_shaking.py</code>).</p>
 <p>The records are the Size model&rsquo;s (page 2): our 19 broadband stations (SCEDC archive), USGS-catalogue quakes of
 M&nbsp;2.0 and above, stations within 200&nbsp;km, at least 3 stations per quake. The coefficients use only the 4,370 training
-quakes; the PGV here is the largest absolute value of each station window (page 12). The test quakes all come after
+quakes; the PGV here is the largest absolute value of each station window (page 11). The test quakes all come after
 the training quakes, and every record of a quake is in the same split.</p>
 
 <h3>How well it fits held-out records</h3>
 <p>On the 6,197 test records the scatter of log<sub>10</sub>(observed / predicted PGV) is 0.33, a factor of about 2.1. After
-the event correction (page 8) it is 0.27. The residual by distance is on page 11.</p>
+the event correction (page 8) it is 0.27. The residual by distance is on page 10.</p>
 </section>
 
 <section>
@@ -172,8 +172,8 @@ quakes); each horizontal row of dots is one quake.</p>
 <section>
 <div class="kicker">Data validation</div>
 <h2>The DYFI check</h2>
-<div class="box">57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones were used
-to fit the offset; the 28 newer ones (1,892 cells) were used only for scoring.</div>
+<div class="box">57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones were
+      used to fit the offset; the newer ones only for scoring: 1,868 cells from the 27 of them our stations recorded.</div>
 <p>From the USGS catalogue we requested the 60 largest Southern California quakes (32.3&ndash;36.9&deg;&nbsp;N,
 121.3&ndash;114.0&deg;&nbsp;W) between 2022-04-15 and 2026-08-31 that have a DYFI product (minimum M&nbsp;3.5). Because the list
 is capped at 60, the quakes are M&nbsp;4.05&ndash;5.22. For each we downloaded the DYFI 10&nbsp;km cell file. A cell is used if
@@ -203,49 +203,51 @@ Nevada, in the scored set) has no records from our stations.</p>
 <section>
 <div class="kicker">Data validation</div>
 <h2>What the 0.42 means</h2>
-<div class="box">0.42 is the mean absolute error (|estimate &minus; DYFI| averaged over cells), not the signed error. The bias is
-+0.14 and 94&nbsp;% of cells are within one level. The reference is USGS &ldquo;Did You Feel It?&rdquo; intensity in 10&nbsp;km
-cells with at least 3 responses, not ShakeMap or station intensities.</div>
+<div class="box">0.42 is the mean absolute error (|estimate &minus; DYFI| averaged over cells), not the signed error. The bias is +0.06
+      and 93&nbsp;% of cells are within one level. The reference is USGS &ldquo;Did You Feel It?&rdquo; intensity in 10&nbsp;km
+      cells with at least 3 responses, not ShakeMap or station intensities.</div>
 <table>
-<tr><th>Measure (28 scored quakes, 1,892 cells)</th><th>Value</th></tr>
+<tr><th>Measure (27 scored quakes our stations recorded, 1,868 cells)</th><th>Value</th></tr>
 <tr><th>Mean absolute error, |estimate &minus; CDI|</th><td>0.42</td></tr>
-<tr><th>Signed mean error (bias), estimate &minus; CDI</th><td>+0.14</td></tr>
+<tr><th>Signed mean error (bias), estimate &minus; CDI</th><td>+0.06</td></tr>
 <tr><th>Root mean square error</th><td>0.54</td></tr>
-<tr><th>Cells within one level</th><td>93.8&nbsp;%</td></tr>
-<tr><th>Mean absolute error, averaged within each quake first</th><td>0.48</td></tr>
-<tr class="tot"><th>Mean absolute error without the offset</th><td>0.68</td></tr>
-<tr><th>Mean absolute error without the V<sub>S30</sub> site term</th><td>0.40</td></tr>
+<tr><th>Cells within one level</th><td>93.1&nbsp;%</td></tr>
+<tr><th>Mean absolute error, averaged within each quake first</th><td>0.52</td></tr>
+<tr class="tot"><th>Mean absolute error without the offset</th><td>0.49</td></tr>
+<tr><th>Mean absolute error without the V<sub>S30</sub> site term</th><td>0.41</td></tr>
 </table>
-<p class="cap"><span class="tn">Table 7.</span> The published validation (<code>scripts/validate_mmi.py</code>).</p>
+<p class="cap"><span class="tn">Table 7.</span> The validation (<code>scripts/validate_mmi.py</code>), with each quake&rsquo;s event
+correction.</p>
 <ul>
   <li><b>Reference:</b> USGS DYFI community decimal intensity (CDI) for each 10&nbsp;km cell with at least 3 responses.
       Not ShakeMap, and not instrumental intensity at stations.</li>
   <li><b>Inputs at each cell:</b> USGS catalogue magnitude and epicentre, distance from the epicentre to the cell centre,
-      V<sub>S30</sub> at the cell centre. No event correction in the published number (page 8 adds it).</li>
-  <li><b>Weighting:</b> each cell counts once, so large quakes weigh more; the largest supplies 16&nbsp;% of the cells.
-      Averaging within each quake first gives 0.48.</li>
-  <li><b>Site term:</b> the V<sub>S30</sub> term gives no measurable gain on DYFI (0.40 without it). It is kept for physics; to
+      V<sub>S30</sub> at the cell centre, and the quake&rsquo;s event correction from our station records (page 8).</li>
+  <li><b>Weighting:</b> each cell counts once, so large quakes weigh more; the largest supplies 17&nbsp;% of the cells.
+      Averaging within each quake first gives 0.52.</li>
+  <li><b>Site term:</b> the V<sub>S30</sub> term gives no measurable gain on DYFI (0.41 without it). It is kept for physics; to
       be rechecked with more quakes or point data rather than 10&nbsp;km cells.</li>
-  <li><b>Rounding:</b> the published numbers use the unrounded offset 0.765. The app uses 0.76, which gives MAE 0.42,
-      bias +0.13 and 94.0&nbsp;%. Pages 8&ndash;10 use 0.76.</li>
 </ul>
 </section>
 
 <section>
 <div class="kicker">Calibration</div>
-<h2>The +0.76 offset</h2>
-<div class="box">The median of (DYFI &minus; model) over the 29 older quakes. The 28 test quakes were excluded, and the offset was
-not changed after scoring.</div>
+<h2>The +0.43 offset</h2>
+<div class="box">The median of (DYFI &minus; model) over the 29 older quakes, with each quake&rsquo;s event correction applied.
+The 28 test quakes were excluded, and the offset was not changed after scoring.</div>
 <div class="eq">offset = median over the 2,088 cells of the 29 older quakes of (CDI &minus; MMI<sub>model</sub>)</div>
-<p>MMI<sub>model</sub> is the Worden conversion of the equation&rsquo;s PGV with the site term, without event correction and
-without offset. The result is 0.765, stored as 0.76. Fitted the same way with each quake&rsquo;s event correction applied,
-the same fit gives 0.43, the offset used in that case (page 9). Each is one constant, with no dependence on magnitude, distance or
-intensity (<code>scripts/validate_mmi.py</code>).</p>
+<p>MMI<sub>model</sub> is the Worden conversion of the equation&rsquo;s PGV with the site term and the quake&rsquo;s event
+correction, without offset. The result is 0.43. It is one constant, with no dependence on magnitude, distance or intensity
+(<code>scripts/validate_mmi.py</code>).</p>
+<p>It is applied wherever the event correction is: the confirmation push text on the server
+(<code>live_watch.push_message</code> &rarr; <code>shaking.estimate_mmi</code>), and on the phone in the app and the Android
+notification, which get the correction with the push and the offset from <code>/api/shaking-model</code>.</p>
+<p class="small">Not verified: the Android code was not compiled or run.</p>
 <h3>What it corrects</h3>
 <p>The Worden et al. (2012) relation was itself derived from about 200,000 DYFI intensities matched to California
 ground-motion records (M&nbsp;3.0&ndash;7.3, under 1 to about 400&nbsp;km). So the offset is not a conversion from instrumental
-to reported intensity; it corrects the whole chain against DYFI. Before the offset the model underestimates DYFI by 0.63
-levels, which on the lower Worden segment equals a factor of about 2.7 in PGV. Possible causes, not tested yet:</p>
+to reported intensity; it corrects the whole chain against DYFI. Before the offset the model, with the event correction, underestimates DYFI by
+0.37 levels, which on the lower Worden segment equals a factor of about 1.8 in PGV. Possible causes, not tested yet:</p>
 <ul>
   <li>Our stations sit on stiffer ground than where people live (station median V<sub>S30</sub> 631&nbsp;m/s), and the
       slope-based V<sub>S30</sub> map captures only part of that.</li>
@@ -256,7 +258,7 @@ levels, which on the lower Worden segment equals a factor of about 2.7 in PGV. P
 <tr><th>DYFI CDI</th><th>Cells</th><th>Bias</th><th>MAE</th></tr>
 {{CDI_ROWS}}
 </table>
-<p class="cap"><span class="tn">Table 8.</span> Error by observed intensity with the offset (configuration C, 27 quakes). A
+<p class="cap"><span class="tn">Table 8.</span> Error by observed intensity with the offset (configuration D, 27 quakes). A
 single constant offset compresses the scale: weak shaking is overestimated and stronger shaking underestimated.</p>
 </section>
 
@@ -278,48 +280,18 @@ magnitude.</p>
 quakes (2,000 resamples). Bias = estimate &minus; DYFI.</p>
 <figure><img src="fig2_stages.png" alt="MAE and bias with 95 percent intervals for each stage"></figure>
 <p class="cap"><span class="tn">Figure 2.</span> Table 9 as a chart: points are the values, bars the 95&nbsp;% intervals. The
-setup used with the correction (D) is highlighted.
+setup used (D) is highlighted.
 <ul>
-  <li>The offset does most of the work: A &rarr; C lowers the MAE from 0.68 to 0.42.</li>
+  <li>The event correction and the offset together (A &rarr; D) lower the MAE from 0.68 to 0.42.</li>
   <li>With a matching offset, adding the event correction gives the same MAE (C vs D) and a smaller bias.</li>
-  <li>D&prime; (0.76 on top of the correction) is the worst setup with an offset, which is why 0.43 is used with the
-      correction (page 9).</li>
 </ul>
-</section>
-
-<section>
-<div class="kicker">Calibration</div>
-<h2>With the event correction: offset 0.43</h2>
-<div class="box">With the event correction, the offset is {{OFF_T}} (D), fitted the same way on the 29 older quakes. The correction already removes part of the
-      underestimate, so 0.76 on top of it (D&prime;) would overestimate by about 0.4 levels.</div>
-<h3>Where it is used</h3>
-<ul>
-  <li><b>Push text (server):</b> <code>live_watch.push_message</code> calls <code>shaking.estimate_mmi</code> with the sized
-      magnitude, the distance to the subscriber&rsquo;s nearest followed station, that station&rsquo;s V<sub>S30</sub> and the
-      event&rsquo;s correction, so the offset is {{OFF_T}}.</li>
-  <li><b>App and Android notification:</b> the same formula on the phone, with the correction sent in the push and the offsets
-      from <code>/api/shaking-model</code>.</li>
-  <li><b>Provisional pushes</b> go out before the full sizing, carry no correction, and so use 0.76 (C).</li>
-</ul>
-<table>
-<tr><th>Difference in MAE</th><th class="l">Comparison</th><th>Value [95% CI]</th></tr>
-{{PAIRED_LIVE}}
-</table>
-<p class="cap"><span class="tn">Table 10.</span> Paired differences on the same cells, quake bootstrap. Positive = D&prime; (0.76 on top of the
-correction) is less accurate. Both intervals exclude zero.</p>
-<h3>How {{OFF_T}} was fitted</h3>
-<p><code>scripts/validate_mmi.py</code> fits it on the 29 older quakes the same way as 0.76, but with each quake&rsquo;s event
-correction applied, so the 28 scored quakes stay untouched. On them it scores MAE 0.42, bias +0.06 and 93.1&nbsp;% within one
-level (27 quakes, 1,868 cells). The calibration file and <code>/api/shaking-model</code> carry it, and the server, the
-app&rsquo;s TypeScript and Android use the same rule, checked by a unit test and a Python-versus-app comparison.</p>
-<p class="small">Not verified: the Android code was not compiled or run.</p>
 </section>
 
 <section>
 <div class="kicker">Calibration</div>
 <h2>What the event correction is for</h2>
-<div class="box">Once the offset is refitted, the event correction does not improve the match to DYFI (C vs D). Its value is that
-it cancels our own magnitude error: a 0.3 error in M moves the estimate by under 0.1 level with it, about 0.4 without.</div>
+<div class="box">Against DYFI the event correction scores about the same as the setup without it (C vs D). Its value is that it
+      cancels our own magnitude error: a 0.3 error in M moves the estimate by under 0.1 level with it, about 0.4 without.</div>
 <h3>Why it cancels magnitude error</h3>
 <p>The correction is t = mean over stations of [log<sub>10</sub>&nbsp;PGV<sub>obs</sub> &minus; (a + bM + c&thinsp;log<sub>10</sub>R + dR +
 site)]. Adding t to the prediction at any place gives the mean observed log<sub>10</sub>&nbsp;PGV plus the distance and site
@@ -330,14 +302,14 @@ the estimate, unless t reaches its &plusmn;0.5 clip.</p>
 <tr><th>+0.3</th><td>0.001</td><td>0.42</td></tr>
 <tr><th>&minus;0.3</th><td>0.07</td><td>0.37</td></tr>
 </table>
-<p class="cap"><span class="tn">Table 11.</span> Mean change in the estimated MMI at the scored DYFI cells. For quakes whose
+<p class="cap"><span class="tn">Table 10.</span> Mean change in the estimated MMI at the scored DYFI cells. For quakes whose
 correction is not clipped the change is exactly 0 (about 10<sup>&minus;15</sup>); the non-zero means come from clipped quakes.</p>
 <h3>Why it does not improve the DYFI score</h3>
 <table>
 <tr><th>Difference in MAE</th><th class="l">Comparison</th><th>Value [95% CI]</th></tr>
 {{PAIRED_TERM}}
 </table>
-<p class="cap"><span class="tn">Table 12.</span> Paired differences on the same cells, quake bootstrap. Negative = the first
+<p class="cap"><span class="tn">Table 11.</span> Paired differences on the same cells, quake bootstrap. Negative = the first
 configuration is more accurate.</p>
 <ul>
   <li>On its own the correction removes about 40&nbsp;% of the raw bias (&minus;0.63 &rarr; &minus;0.37) and lowers the MAE by
@@ -364,8 +336,8 @@ configuration is more accurate.</p>
       between 10 and 1&nbsp;km. Physically, within about one focal depth of the epicentre the distance to the source hardly
       changes.</li>
   <li>Data: 7 training records within 5&nbsp;km and 41 at 5&ndash;10&nbsp;km; no test record within 5&nbsp;km. Against DYFI,
-      the 31 cells within 10&nbsp;km show a bias of &minus;0.05 to +0.18 (Table 14), but that is too few to judge.</li>
-  <li>For large magnitudes close in, the equation is outside its calibrated range (Table 15): only 29 training quakes are
+      the 31 cells within 10&nbsp;km show a bias of &minus;0.15 to +0.04 (Table 13), but that is too few to judge.</li>
+  <li>For large magnitudes close in, the equation is outside its calibrated range (Table 14): only 29 training quakes are
       M&nbsp;5 or larger, and the DYFI check reaches M&nbsp;5.2.</li>
 </ul>
 <div class="two">
@@ -379,7 +351,7 @@ configuration is more accurate.</p>
 <tr><th>100&ndash;200</th><td>3,322</td><td>+0.029</td><td>0.326</td><td>0.273</td></tr>
 <tr class="tot"><th>All</th><td>6,197</td><td></td><td>0.329</td><td>0.270</td></tr>
 </table>
-<p class="cap"><span class="tn">Table 13.</span> Held-out test records: residual = log<sub>10</sub>(observed / predicted PGV);
+<p class="cap"><span class="tn">Table 12.</span> Held-out test records: residual = log<sub>10</sub>(observed / predicted PGV);
 positive = the equation underestimates.</p>
 </div>
 <div>
@@ -387,14 +359,14 @@ positive = the equation underestimates.</p>
 <tr><th>Distance (km)</th><th>Cells</th><th>Bias</th><th>MAE</th></tr>
 {{DIST_ROWS}}
 </table>
-<p class="cap"><span class="tn">Table 14.</span> DYFI error by distance, configuration C (27 quakes).</p>
+<p class="cap"><span class="tn">Table 13.</span> DYFI error by distance, configuration D (27 quakes).</p>
 </div>
 </div>
 <table>
 <tr><th>Magnitude</th><th>1 km</th><th>5 km</th><th>10 km</th><th>20 km</th><th>50 km</th></tr>
 {{PRED_ROWS}}
 </table>
-<p class="cap"><span class="tn">Table 15.</span> Predicted PGV (cm/s) / MMI before the offset, on reference ground
+<p class="cap"><span class="tn">Table 14.</span> Predicted PGV (cm/s) / MMI before the offset, on reference ground
 (V<sub>S30</sub> 631&nbsp;m/s), without event correction. * = clamped at MMI&nbsp;1 or 10.</p>
 </section>
 
@@ -433,9 +405,9 @@ positive = the equation underestimates.</p>
 <h2>Weak shaking</h2>
 <div class="box">Worden&rsquo;s conversion from PGV to intensity is two straight lines, a gentle one for weak shaking
       (up to 3.4&nbsp;cm/s) and a steeper one above, and the result is capped between I and X. USGS ShakeMap adds a third line
-      for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.47 vs 0.42), so we left it
-      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking one shows
-      level II and the other level I; both read &ldquo;Not felt&rdquo;.</div>
+      for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.46 vs 0.42), so we left it
+      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking their
+      numbers differ slightly; both still show level I, &ldquo;Not felt&rdquo;.</div>
 <div class="eq">MMI = 3.78 + 1.47&middot;log<sub>10</sub> PGV &nbsp; for log<sub>10</sub> PGV &le; 0.53 (PGV &le; 3.4 cm/s, MMI &le; 4.56)<br>
 MMI = 2.89 + 3.16&middot;log<sub>10</sub> PGV &nbsp; above that &nbsp;&nbsp;(PGV in cm/s)</div>
 <ul>
@@ -443,26 +415,26 @@ MMI = 2.89 + 3.16&middot;log<sub>10</sub> PGV &nbsp; above that &nbsp;&nbsp;(PGV
       Worden&rsquo;s magnitude and distance terms (in ShakeMap: C5 = 0.90, C6 = 0.00, C7 = &minus;0.18, applied for
       10&ndash;300&nbsp;km and M&nbsp;3.0&ndash;7.3).</li>
   <li>Low end: the lower segment is used as published, down to PGV = 0.013&nbsp;cm/s, where MMI reaches 1.</li>
-  <li>Where it matters: 897 of the 1,868 scored cells (48&nbsp;%) have a model MMI below 2 before the offset, and none below 1.
+  <li>Where it matters: with the event correction, 654 of the 1,868 scored cells (35&nbsp;%) have a model MMI below 2
+      before the offset, and 56 sit at the floor of 1.
       On reference ground the floor is reached beyond about 17&nbsp;km for M&nbsp;3.0, 45&nbsp;km for M&nbsp;3.5 and 92&nbsp;km for
       M&nbsp;4.0.</li>
   <li>USGS ShakeMap adds a third segment for MMI 1&ndash;2: MMI = 4.62 + 2.17&middot;log<sub>10</sub> PGV below
       log<sub>10</sub> PGV = &minus;1.21 (PGV &lt; 0.062&nbsp;cm/s). Its source code calls this the range &ldquo;discussed in the paper
-      but not specifically implemented there&rdquo;. Tested on the 28 scored quakes, it is worse (Table 16), so we keep two
+      but not specifically implemented there&rdquo;. Tested on the scored quakes, it is worse (Table 15), so we keep two
       segments.</li>
 </ul>
 <table>
 <tr><th>Low end</th><th>Offset (refitted)</th><th>MAE</th><th>Bias</th><th>Within one level</th></tr>
-<tr><th>Two segments (current)</th><td>0.76</td><td>0.42</td><td>+0.13</td><td>94.0&nbsp;%</td></tr>
-<tr><th>Three segments (ShakeMap)</th><td>0.91</td><td>0.47</td><td>+0.22</td><td>91.0&nbsp;%</td></tr>
+<tr><th>Two segments (used)</th><td>0.43</td><td>0.42</td><td>+0.06</td><td>93.1&nbsp;%</td></tr>
+<tr><th>Three segments (ShakeMap)</th><td>0.49</td><td>0.46</td><td>+0.07</td><td>91.6&nbsp;%</td></tr>
 </table>
-<p class="cap"><span class="tn">Table 16.</span> The two forms on the 28 scored quakes, each with its offset fitted on the 29
-older quakes.</p>
+<p class="cap"><span class="tn">Table 15.</span> The two forms on the 27 scored quakes our stations recorded, with the event
+correction, each with its offset fitted on the 29 older quakes.</p>
 <h3>The clamping bug</h3>
-<p>The Python code (server push wording, validation) clamps to 1 before adding the offset, so its lowest output is 1.76
-(level II). The app and the Android code add the offset first, so their lowest is 1.0 (level I). A test over 315 cases found
-differences only where the model MMI is at the floor (109 cases). There is no visible effect today, because levels I and II
-share the label &ldquo;Not felt&rdquo;, but the code should be aligned.</p>
+<p>The Python code (server push wording, validation) clamps to 1 before adding the offset, so its lowest output is 1.43.
+The app and the Android code add the offset first, so their lowest is 1.0. Both round to level I (&ldquo;Not felt&rdquo;), so
+the level shown is the same, but the code should be aligned.</p>
 <p class="small" style="margin-top:18px"><b>References.</b> Worden, C. B., M. C. Gerstenberger, D. A. Rhoades and D. J. Wald
 (2012). Probabilistic relationships between ground-motion parameters and Modified Mercalli intensity in California.
 <i>BSSA</i> 102(1), doi:10.1785/0120110156. &middot; USGS ShakeMap <code>esi-shakelib</code>, <code>gmice/wgrw12.py</code>.

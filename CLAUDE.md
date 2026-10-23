@@ -247,8 +247,11 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 ### Deployed (status as of 2026-10-07)
 Live at **https://seismicsocal.duckdns.org** (Oracle A1, `ubuntu@167.234.214.169`, `/opt/seismicsocal`,
 Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH session needs the user).
-- **Running:** `main` (deployed by CI on every push; v2 system, 19 stations — all up, two-stage alerts with the
+- **Running:** `main` (deployed by CI on every push; v2 system, 19 stations, two-stage alerts with the
   per-device alert speed, /api/health, serif headings + fluid layout + CIs). Detection live since 2026-10-05 09:13 UTC.
+- **SeedLink host is `rtserve.earthscope.org:18000` (2026-10-23).** The old `rtserve.iris.washington.edu` stopped resolving
+  (IRIS is now EarthScope); the daemon only noticed on the next restart (13:32–13:39 UTC detection gap). 18/19 stations up;
+  **ARV is down** (no data since ~2026-10-20, and not listed on the EarthScope relay).
 - **App 2.00.00 is a FORCED update** (server LATEST = MIN = 2.00.00; APK on /app built 2026-10-06). The APK is
   signed with the other device's debug key (different signature from 1.01.00), so updating = uninstall +
   reinstall; that wipes the app's stored subscription, so users must re-subscribe. Stale tokens are pruned
@@ -270,9 +273,10 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   checkpoint sha256 on the VM (DEPLOY.md).
 
 ### Open TODOs
-- **Offset fix (2026-10-23):** code + site ship with CI; the VM also needs the new
-  `data/processed/shaking_calibration.json` (scp, verify sha256; without `mmi_offset_term` the server falls back to 0.76
-  for both). Phones get it (app + native notification) only with the next APK release.
+- **MMI offset 0.43 with the event term — LIVE on the server 2026-10-23** (commit bf2bab5; VM `shaking_calibration.json`
+  scp'd, sha256 verified, previous file at `shaking_calibration.json.bak-2026-10-23`; `/api/shaking-model` serves
+  `mmi_offset_term` 0.43). Phones get it (app + native notification) only with the next APK release — not done yet.
+- **ARV not streaming** (see Deployed): check whether it moved location code or is just down; `build_dataset.py --stage check`.
 - **Pushes ON — re-check 2026-10-12:** rerun `crosscheck_events.py --log <VM events.jsonl> --since 2026-10-08T02:40`
   + `data/processed/push_check/magcheck.py <log>` (confirmed vs USGS magnitude). 2026-10-09 check (1.8 days):
   confirmed precision 0.88 (chance 0.00), ~9 confirmed/day, 1 push-eligible (3.02 vs USGS 3.16); magnitude bias

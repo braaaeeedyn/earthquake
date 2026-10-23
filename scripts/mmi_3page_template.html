@@ -103,22 +103,24 @@
   <li><b>Magnitude vs distance:</b> most records are M&nbsp;3&ndash;4 at 50&ndash;200&nbsp;km. Only 7 training records are within
       5&nbsp;km and only 29 quakes are M&nbsp;5 or larger, so close, large quakes are outside the calibrated range.</li>
   <li><b>DYFI check:</b> 57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones
-      (2,088 cells) were used to fit the offset; the 28 newer ones (1,892 cells) only for scoring. Reference: USGS
+      (2,088 cells) were used to fit the offset; the newer ones only for scoring: 1,868 cells from the 27 of them our stations
+      recorded. Reference: USGS
       &ldquo;Did You Feel It?&rdquo; intensity (CDI) in 10&nbsp;km cells with 3+ responses.</li>
-  <li><b>0.42 is the mean absolute error</b> over cells, not the signed error. The bias is +0.14, RMSE 0.54, 94&nbsp;% of cells
-      are within one level, and averaging within each quake first gives 0.48.</li>
+  <li><b>0.42 is the mean absolute error</b> over cells, not the signed error. The bias is +0.06, RMSE 0.54, 93&nbsp;% of cells
+      are within one level, and averaging within each quake first gives 0.52.</li>
 </ul>
 </section>
 
 <section>
 <h2>Calibration</h2>
 <ul>
-  <li><b>The +0.76 offset</b> is the median of (CDI &minus; model MMI) over the 2,088 cells of the 29 older quakes: 0.765,
-      stored as 0.76. The 28 scored quakes were excluded and the offset was not changed after scoring. Worden et al. (2012)
-      was itself fitted to DYFI, so the offset corrects the whole chain rather than converting instrumental to reported
-      intensity; before it, the model underestimates DYFI by 0.63 levels.</li>
   <li><b>Event correction:</b> for each quake, the mean over our stations of log<sub>10</sub>(observed / predicted PGV),
       clipped to &plusmn;0.5 and added to the prediction everywhere, like ShakeMap&rsquo;s bias correction.</li>
+  <li><b>The +0.43 offset</b> is the median of (CDI &minus; model MMI) over the 2,088 cells of the 29 older quakes, with each
+      quake&rsquo;s event correction applied. The 28 scored quakes were excluded and the offset was not changed after scoring.
+      Worden et al. (2012) was itself fitted to DYFI, so the offset corrects the whole chain rather than converting
+      instrumental to reported intensity; before it, the model underestimates DYFI by 0.37 levels. It is applied to every
+      confirmed quake, in the server, the app and Android alike.</li>
 </ul>
 <table>
 <tr><th>Stage</th><th class="l">Steps</th><th>Offset</th><th>MAE [95% CI]</th><th>Bias [95% CI]</th><th>RMSE</th><th>Within 1</th><th>MAE per quake</th></tr>
@@ -129,20 +131,9 @@ Intervals from a bootstrap that resamples whole quakes. Bias = estimate &minus; 
 <table>
 <tr><th>Difference in MAE</th><th class="l">Comparison</th><th>Value [95% CI]</th></tr>
 {{PAIRED_TERM}}
-{{PAIRED_LIVE}}
 </table>
 <p class="cap"><span class="tn">Table 2.</span> Paired differences on the same cells. Negative = the first configuration is more
 accurate.</p>
-
-<h3>With the event correction: offset 0.43</h3>
-<ul>
-  <li>With the event correction the offset is {{OFF_T}} (D), fitted the same way on the 29 older quakes by
-      <code>validate_mmi.py</code>: MAE 0.42, bias +0.06 on the newer quakes. The correction already removes part of the
-      underestimate, so 0.76 on top of it (D&prime;) would overestimate by about 0.4 levels and is 0.14 worse in MAE, with
-      both intervals excluding zero.</li>
-  <li>Confirmed quakes carry the correction and use {{OFF_T}}, in the server, the app and Android alike. Provisional pushes go
-      out before sizing, carry no correction, and use 0.76 (C).</li>
-</ul>
 
 <h3>What the event correction is for</h3>
 <ul>
@@ -150,8 +141,8 @@ accurate.</p>
       most of the DYFI error is cell-to-cell scatter within a quake, which one number per quake cannot remove.</li>
   <li>Its value is that the b&middot;M term cancels, so our own magnitude error drops out: shifting M by +0.3 / &minus;0.3 moves
       the estimate by 0.001 / 0.07 levels with the correction, against 0.42 / 0.37 without.</li>
-  <li>A single constant offset compresses the scale: cells with CDI 2&ndash;2.9 are overestimated by +0.20 and cells with CDI
-      5 or more underestimated by &minus;0.46.</li>
+  <li>A single constant offset compresses the scale: cells with CDI 2&ndash;2.9 are overestimated by +0.13 and cells with CDI
+      5 or more underestimated by &minus;0.58.</li>
 </ul>
 </section>
 
@@ -200,12 +191,12 @@ predicted. 1.0&times; means exactly right.</p>
   <li><b>What it is:</b> Worden et al. (2012), the same conversion USGS ShakeMap uses: a gentle straight line for weak shaking
       and a steeper one for strong shaking. Before the offset, 0.1&nbsp;cm/s gives 2.3, 1&nbsp;cm/s gives 3.8 and 10&nbsp;cm/s
       gives 6.05. The result is capped between 1 and 10, so 0.01&nbsp;cm/s (which would give 0.8) becomes 1.</li>
-  <li><b>The weakest shaking:</b> about half of the DYFI test areas are below level 2 before the offset. ShakeMap adds a third
-      line for levels 1&ndash;2; we tried it and it matched people&rsquo;s reports worse (error 0.47 vs 0.42, bias +0.22 vs
-      +0.13), so we kept the two published lines.</li>
+  <li><b>The weakest shaking:</b> about a third of the DYFI test areas are below level 2 before the offset. ShakeMap adds a third
+      line for levels 1&ndash;2; we tried it and it matched people&rsquo;s reports worse (error 0.46 vs 0.42, 92&nbsp;% vs 93&nbsp;%
+      within one level), so we kept the two published lines.</li>
   <li><b>Small bug:</b> the server applies the 1&ndash;10 cap before adding the offset and the app after, so for the very
-      weakest shaking the server says level II and the app level I. Both are shown as &ldquo;Not felt&rdquo;, so nothing visible
-      changes, but the two should match.</li>
+      weakest shaking their numbers differ slightly (server 1.43, app 1.0). Both round to level I, &ldquo;Not felt&rdquo;, so
+      nothing visible changes, but the two should match.</li>
 </ul>
 <p class="small" style="margin-top:10px"><b>References.</b> Worden, Gerstenberger, Rhoades and Wald (2012), <i>BSSA</i> 102(1),
 doi:10.1785/0120110156. &middot; USGS ShakeMap <code>esi-shakelib</code>, <code>gmice/wgrw12.py</code>. &middot; USGS &ldquo;Did You

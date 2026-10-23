@@ -78,7 +78,7 @@ STAGES = [("A", "Equation + site term &rarr; Worden", "0", evt.mmi0.values),
           ("D", "B + refitted offset (used)", f"{off_t:.2f}", evt.mmi_t.values + off_t),
           ("D&prime;", "B + offset 0.76", "0.76", evt.mmi_t.values + .76)]
 SHORT = {"A": "Equation + site term &rarr; Worden", "B": "A + event correction", "C": "A + offset 0.76 (published)",
-         "D": f"B + offset {off_t:.2f} (used with the correction)", "D&prime;": "B + offset 0.76"}
+         "D": f"B + offset {off_t:.2f} (used)", "D&prime;": "B + offset 0.76"}
 res, staged_rows, short_rows = {}, "", ""
 for k, lab, off, p in STAGES:
     m_, mlo, mhi = stats.bootstrap_ci(mae, y, p, clusters=ids, n_boot=2000)
@@ -106,19 +106,17 @@ def paired(pairs):
     return rows
 
 
-paired_live = paired((("D&prime;", "C", "offset 0.76 on top of the correction vs published"),
-                      ("D&prime;", "D", "offset 0.76 vs 0.43, both with the correction")))
 paired_term = paired((("B", "A", "event correction, no offset"), ("D", "C", "correction with matching offset vs published")))
 
-eC = np.clip(evt.mmi0 + .76, 1, 10) - evt.cdi
+eD = np.clip(evt.mmi_t + off_t, 1, 10) - evt.cdi           # the setup used (D)
 dist_rows = ""
 for a, b in zip([0, 5, 10, 20, 50, 100, 200], [5, 10, 20, 50, 100, 200, 400]):
     s = (evt.r >= a) & (evt.r < b)
-    dist_rows += f"<tr><th>{a}&ndash;{b}</th><td>{s.sum():,}</td><td>{fmt(eC[s].mean())}</td><td>{f2(eC[s].abs().mean())}</td></tr>"
+    dist_rows += f"<tr><th>{a}&ndash;{b}</th><td>{s.sum():,}</td><td>{fmt(eD[s].mean())}</td><td>{f2(eD[s].abs().mean())}</td></tr>"
 cdi_rows = ""
 for a, b, lab in ((1, 2, "1.0&ndash;1.9"), (2, 3, "2.0&ndash;2.9"), (3, 4, "3.0&ndash;3.9"), (4, 5, "4.0&ndash;4.9"), (5, 9, "5.0 and above")):
     s = (evt.cdi >= a) & (evt.cdi < b)
-    cdi_rows += f"<tr><th>{lab}</th><td>{s.sum():,}</td><td>{fmt(eC[s].mean())}</td><td>{f2(eC[s].abs().mean())}</td></tr>"
+    cdi_rows += f"<tr><th>{lab}</th><td>{s.sum():,}</td><td>{fmt(eD[s].mean())}</td><td>{f2(eD[s].abs().mean())}</td></tr>"
 
 pred_rows = ""
 for mag in (3.0, 4.0, 4.5, 5.5, 6.5, 7.1):
@@ -184,7 +182,7 @@ fig.savefig(OUT / "fig2_stages.png", bbox_inches="tight"); plt.close(fig)
 
 # ------------------------------------------------------------------ documents
 SUBS = {"T_TRAIN": t_train, "T_TEST": t_test, "T_CELLS_FIT": t_cells_fit, "T_CELLS_EV": t_cells_ev,
-        "STAGED_ROWS": staged_rows, "STAGED_SHORT": short_rows, "PAIRED_LIVE": paired_live, "PAIRED_TERM": paired_term,
+        "STAGED_ROWS": staged_rows, "STAGED_SHORT": short_rows, "PAIRED_TERM": paired_term,
         "DIST_ROWS": dist_rows, "CDI_ROWS": cdi_rows, "PRED_ROWS": pred_rows, "OFF_T": f"{off_t:.2f}"}
 edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"  # ponytail: Windows-only; any headless Chromium works
 for name, pdf_name in (("mmi_summary", "MMI_summary_2026-10-23.pdf"), ("mmi_3page", "MMI_3page_2026-10-23.pdf"),
