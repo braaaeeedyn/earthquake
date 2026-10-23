@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Estimated shaking intensity (MMI): details</title>
+<style>
+  @page { size: Letter; margin: 0.65in 0.75in 0.7in;
+    @bottom-center { content: counter(page) " / " counter(pages); font: 8pt "Segoe UI", sans-serif; color: #737373; } }
+  body { font: 9.8pt/1.45 "Segoe UI", Calibri, Arial, sans-serif; color: #000000; margin: 0; }
+  h1 { font: 600 17pt/1.2 Georgia, serif; margin: 0 0 2px; }
+  .meta { color: #525252; font-size: 8.8pt; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1.2px solid #000000; }
+  section + section { break-before: page; }
+  .kicker { font-size: 8.3pt; color: #737373; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 2px; }
+  h2 { font: 600 15pt/1.25 Georgia, serif; margin: 0 0 8px; }
+  h3 { font-size: 10.3pt; margin: 14px 0 4px; break-after: avoid; }
+  p { margin: 5px 0; }
+  ul, ol { margin: 4px 0 6px; padding-left: 20px; }
+  li { margin: 2px 0; }
+  code { font: 8.8pt Consolas, monospace; }
+  .box { border-left: 3px solid #000000; background: #fafafa; padding: 8px 14px 8px 12px; margin: 0 0 12px; }
+  .eq { font: 9.6pt Cambria, Georgia, serif; background: #fafafa; border: 1px solid #e5e5e5; padding: 6px 12px; margin: 6px 0;
+        border-radius: 6px; }
+  table { border-collapse: collapse; font-size: 8.5pt; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+  th, td { white-space: nowrap; padding: 2.5px 7px; border-bottom: 0.6px solid #e5e5e5; text-align: right; vertical-align: top; }
+  tr:first-child th { border-bottom: 1px solid #000000; font-weight: 600; }
+  th:first-child { text-align: left; }
+  td.l, th.l { text-align: left; white-space: normal; }
+  tr.tot td, tr.tot th { border-top: 1px solid #d4d4d4; }
+  tr.hl td, tr.hl th { background: #e5e5e5; font-weight: 600; }
+  .ci { color: #737373; font-size: 7.8pt; font-weight: 400; }
+  .cap { font-size: 8.3pt; color: #525252; margin: 2px 0 10px; }
+  .tn { font-weight: 600; color: #000000; }
+  figure { margin: 10px 0 4px; }
+  figure img { width: 100%; }
+  .two { display: flex; gap: 22px; align-items: flex-start; }
+  .small { font-size: 8.5pt; color: #525252; }
+</style>
+</head>
+<body>
+
+<h1>Estimated shaking intensity (MMI): details</h1>
+<div class="meta">SeismicSoCal &middot; 23 October 2026 &middot; Braedyn Thompson &middot; one page for each point of the one-page summary</div>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>How the Detect model was trained</h2>
+<div class="box">Trained on labelled 30&nbsp;s single-station windows, not continuous data: 34,377 with a P arrival (8,238 quakes,
+M&nbsp;2.0&ndash;7.2) and 16,366 without (random quiet times, plus the old live system&rsquo;s false alarms), half and half in
+each batch. Mixed, continuous data is tested separately, by replaying 80 held-out days through the live system.</div>
+<table>
+<tr><th>Split</th><th class="l">Window times</th><th>Quake windows (quakes)</th><th>Random-time noise (times)</th><th>False alarms</th></tr>
+<tr><th>Train</th><td class="l">2000-01-01 &ndash; 2019-07-07</td><td>23,375 (6,044)</td><td>10,701 (670)</td><td>1,286</td></tr>
+<tr><th>Validation</th><td class="l">2019-07-07 &ndash; 2022-04-15</td><td>6,038 (1,241)</td><td>1,264 (79)</td><td>379</td></tr>
+<tr><th>Test</th><td class="l">2022-04-15 &ndash; 2026-08-28</td><td>4,964 (953)</td><td>2,339 (148)</td><td>397</td></tr>
+<tr class="tot"><th>All</th><td></td><td>34,377 (8,238)</td><td>14,304 (896)</td><td>2,062</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 1.</span> Detect windows by split. Quake and noise windows are split together, 70/15/15
+by time; the false alarms (September&ndash;October 2026, after all the quake data) are split by date: up to Sep 28, Sep
+29&ndash;Oct 1, Oct 2&ndash;5.</p>
+<ul>
+  <li><b>Quake windows:</b> M&nbsp;3+ quakes within 200&nbsp;km of a station, plus a random 4,000 M&nbsp;2&ndash;3 quakes within
+      100&nbsp;km. One window per station where the live P picker finds the P wave (signal-to-noise &ge;&nbsp;3), vertical
+      component, stored as P&nbsp;&minus;&nbsp;26&nbsp;s to P&nbsp;+&nbsp;30&nbsp;s. Each training example is a random 30&nbsp;s crop
+      with P anywhere 1&ndash;25&nbsp;s in, because live data slides past the detector.</li>
+  <li><b>Random-time noise:</b> 900 random times in 2000&ndash;2026 (any hour), 45&nbsp;s at every station, kept only if no
+      catalogued M&nbsp;1+ quake is within 150&nbsp;km and 150&nbsp;s and no M&nbsp;3+ within 500&nbsp;km and 300&nbsp;s. 896
+      times had data (median 17 stations each). Training uses random 30&nbsp;s crops.</li>
+  <li><b>False alarms (hard negatives):</b> windows where the first live daemon declared a quake that matches nothing in
+      the catalogue. They teach the model what our own stations&rsquo; local noise looks like.</li>
+  <li><b>Input:</b> demean, causal 1&nbsp;Hz high-pass, unit standard deviation; the same function in training and live.</li>
+  <li><b>Training:</b> each batch has 128 quake windows and 128 quake-free ones (a third of them false alarms), random
+      polarity flips, binary cross-entropy, Adam, 12 epochs. Five seeds; the one with the best validation AUC is kept,
+      and its threshold is set on validation.</li>
+  <li><b>Kept apart:</b> all windows of one quake share its origin time, so a quake is never split between sets (one
+      random-time noise snapshot at the validation/test boundary is).</li>
+</ul>
+<h3>Results, and the test on mixed data</h3>
+<p>On the 7,303 test windows: AUC 0.9998 (95&nbsp;% CI 0.9997&ndash;0.9999), MCC 0.886, against 0.816 AUC for STA/LTA. That
+score uses the separate labelled windows. The realistic test is the replay: 80 held-out days (April 2022 &ndash; August 2026)
+of continuous archive data run through the full live pipeline (detect, pick, locate, size), quake and quiet periods
+together. It sent 145 pushes, all for real quakes; confirmed-event precision was 86&nbsp;% on busy days and 79&nbsp;% on
+random days (chance 4&nbsp;% and 0&nbsp;%), and it caught 68&nbsp;% of M&nbsp;3+ quakes.</p>
+</section>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>How the Size model was trained</h2>
+<div class="box">Trained on all M&nbsp;3+ quakes in the region from 2000 to Aug 2026 with at least 3 of our stations within
+200&nbsp;km, plus a random 4,000 M&nbsp;2&ndash;3 quakes, using only stations within 100&nbsp;km (6,243 quakes). For each quake it sees
+30&nbsp;s of shaking at every station that recorded it (each recording&rsquo;s shape, how big it was, and the station&rsquo;s
+distance) and learns to output the catalogue magnitude; in training the location, timing and stations are randomly
+disturbed to mimic live conditions. Both models are split 70/15/15 by time and by quake; no quake used to train one is in
+the other&rsquo;s test set.</div>
+<h3>How it works, in plain terms</h3>
+<ul>
+  <li><b>Which quakes:</b> all M&nbsp;3+ quakes in the region from 2000 to Aug 2026 with at least 3 of our stations within
+      200&nbsp;km (thinned so that one aftershock swarm cannot dominate), plus a random 4,000 M&nbsp;2&ndash;3 quakes, using only
+      stations within 100&nbsp;km. The small ones are there so the small quakes the live system detects are sized correctly. A
+      quake is kept if at least 3 stations have a usable recording: 6,243 quakes, a median of 5 stations each.</li>
+  <li><b>What it sees:</b> for each quake, 30&nbsp;s of shaking at every station that recorded it, starting just before the
+      P wave. Each recording is given as three things: its shape, how big it was, and how far the station is from the
+      quake.</li>
+  <li><b>What it does:</b> it reads each station&rsquo;s recording, lets nearby stations compare notes, then combines all of
+      them into one magnitude.</li>
+  <li><b>How it learns:</b> it guesses the magnitude of each training quake, is told the catalogue answer, and adjusts itself
+      to make the miss smaller, over 40 passes through the 4,370 training quakes. Five copies are trained this way and their
+      answers are averaged.</li>
+  <li><b>Practice for live conditions:</b> during training the quake&rsquo;s location is moved by a few km, the timing is
+      nudged by up to half a second, and some stations are left out, because the live system works from its own location
+      estimate and whichever stations report first.</li>
+  <li><b>Split:</b> 4,370 training quakes (2000 &ndash; July 2019), 936 validation (to Aug 2021) and 937 test quakes
+      (Aug 2021 &ndash; Aug 2026). The PGV equation (next page) is fitted on the same 4,370 training quakes.</li>
+</ul>
+<p class="small"><b>Technical details.</b> Windows P&nbsp;&minus;&nbsp;5&nbsp;s to P&nbsp;+&nbsp;25&nbsp;s, 3 components, aligned on the
+live P picker; each scaled to unit peak, with standardized log<sub>10</sub> peak velocity and log<sub>10</sub> distance as node
+features, plus four network amplitude/distance statistics. A CNN per station, two graph-convolution layers over the station
+graph (Gaussian weights, &sigma; 50&nbsp;km, cut at 150&nbsp;km), one Transformer layer, a mean over stations and a small dense
+head. Mean squared error, Adam (learning rate 0.001, cosine decay, weight decay 0.0001), 40 epochs, 32 quakes per batch,
+five seeds averaged. Augmentation: epicentre moved by a normal error of 8&nbsp;km in each direction, windows shifted by up to
+&plusmn;0.5&nbsp;s, and either the nearest k&nbsp;&ge;&nbsp;3 stations kept or 20&nbsp;% dropped at random.</p>
+<h3>Results</h3>
+<p>On the 937 test quakes: R<sup>2</sup> 0.951 (95&nbsp;% CI 0.943&ndash;0.959), MAE 0.10 magnitude units, against 0.886 for an
+amplitude-plus-distance regression. In a live-like test (10&nbsp;km location error, only the nearest 3&ndash;6 stations)
+R<sup>2</sup> is 0.939. The test quakes are all M&nbsp;2.0&ndash;5.2 and only 29 training quakes are M&nbsp;5 or larger, so large
+quakes are barely tested.</p>
+<h3>The two models use the same quakes</h3>
+<p>6,043 quakes are in both data sets (Detect also has quakes with fewer than 3 usable stations). Because each set is cut
+at its own 70&nbsp;% and 85&nbsp;% points, the cut dates differ slightly, but every shared Detect training quake is in the Size
+training split and every shared Detect test quake is in the Size test split. The only crossover is through validation:
+219 Detect validation quakes are in the Size training (115) or test (104) split, and validation only picks seeds and
+thresholds.</p>
+</section>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>The ground-motion equation</h2>
+<div class="box">Fitted on the Size model&rsquo;s 4,370 training quakes (2000 to July 2019, 25,526 station records). Its 937 test
+quakes are from 2021&ndash;2026.</div>
+<p>The estimate has two steps. A ground-motion equation predicts peak ground velocity (PGV) at a place, and
+Worden et al. (2012) converts PGV to MMI:</p>
+<div class="eq">log<sub>10</sub> PGV [m/s] = a + b&middot;M + c&middot;log<sub>10</sub> R + d&middot;R + e&middot;log<sub>10</sub>(V<sub>S30</sub> / 631) &nbsp;(+ event correction)</div>
+<p>with a = &minus;5.697, b = 0.981, c = &minus;0.868, d = &minus;0.00456, e = &minus;0.406. R is the epicentral distance in km
+(at least 1), V<sub>S30</sub> comes from the USGS slope-based map, and 631&nbsp;m/s is the median at our stations. The
+coefficients are a least-squares fit to log<sub>10</sub>&nbsp;PGV of every training record (<code>scripts/calibrate_shaking.py</code>).</p>
+<p>The records are the Size model&rsquo;s (page 2): our 19 broadband stations (SCEDC archive), USGS-catalogue quakes of
+M&nbsp;2.0 and above, stations within 200&nbsp;km, at least 3 stations per quake. The coefficients use only the 4,370 training
+quakes; the PGV here is the largest absolute value of each station window (page 12). The test quakes all come after
+the training quakes, and every record of a quake is in the same split.</p>
+
+<h3>How well it fits held-out records</h3>
+<p>On the 6,197 test records the scatter of log<sub>10</sub>(observed / predicted PGV) is 0.33, a factor of about 2.1. After
+the event correction (page 8) it is 0.27. The residual by distance is on page 11.</p>
+</section>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>Magnitude against distance</h2>
+<div class="box">Most records are M&nbsp;3&ndash;4 at 50&ndash;200&nbsp;km. Only 7 training records are within 5&nbsp;km and only
+29 quakes are M&nbsp;5 or larger, so close, large quakes are outside the calibrated range.</div>
+{{T_TRAIN}}
+<p class="cap"><span class="tn">Table 2.</span> Training records by magnitude and distance. Quakes per magnitude band:
+1,182 / 2,777 / 382 / 27 / 2. 85&nbsp;% of the records are 50&ndash;200&nbsp;km away.</p>
+{{T_TEST}}
+<p class="cap"><span class="tn">Table 3.</span> Test records. Quakes per band: 249 / 620 / 65 / 3. No test record is
+within 5&nbsp;km.</p>
+<figure><img src="fig1_mr.png" alt="Magnitude against distance for station records and DYFI cells"></figure>
+<p class="cap"><span class="tn">Figure 1.</span> Magnitude against distance. (a) Station records used to fit the PGV
+equation (validation split not shown). (b) DYFI cells used to fit the offset (older quakes) and to score the model (newer
+quakes); each horizontal row of dots is one quake.</p>
+</section>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>The DYFI check</h2>
+<div class="box">57 quakes of M&nbsp;4.05&ndash;5.22 (2022&ndash;2026), all after the training period. The 29 older ones were used
+to fit the offset; the 28 newer ones (1,892 cells) were used only for scoring.</div>
+<p>From the USGS catalogue we requested the 60 largest Southern California quakes (32.3&ndash;36.9&deg;&nbsp;N,
+121.3&ndash;114.0&deg;&nbsp;W) between 2022-04-15 and 2026-08-31 that have a DYFI product (minimum M&nbsp;3.5). Because the list
+is capped at 60, the quakes are M&nbsp;4.05&ndash;5.22. For each we downloaded the DYFI 10&nbsp;km cell file. A cell is used if
+it has at least 3 responses and its centre is inside our V<sub>S30</sub> map. Three quakes had no such cell (two M&nbsp;4.3
+near Niland, one M&nbsp;4.1 near Imperial), which leaves 57, split at the median origin time.</p>
+<table>
+<tr><th>Set</th><th>Quakes</th><th class="l">Origin times</th><th>Magnitude (median)</th><th>Cells</th><th>Distance (km)</th><th class="l">Used for</th></tr>
+<tr><th>Older</th><td>29</td><td class="l">2022-05-26 &ndash; 2024-07-29</td><td>4.05&ndash;5.08 (4.28)</td><td>2,088</td><td>3.7&ndash;354</td><td class="l">fitting the offset</td></tr>
+<tr><th>Newer</th><td>28</td><td class="l">2024-08-07 &ndash; 2026-07-13</td><td>4.06&ndash;5.22 (4.37)</td><td>1,892</td><td>1.5&ndash;373</td><td class="l">scoring only</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 4.</span> The DYFI quakes and cells.</p>
+{{T_CELLS_EV}}
+<p class="cap"><span class="tn">Table 5.</span> Scored cells (28 newer quakes) by magnitude and distance in km. Most are
+weak shaking: 1,281 cells have CDI 2.0&ndash;2.9 and only 23 have CDI 5 or more.</p>
+{{T_CELLS_FIT}}
+<p class="cap"><span class="tn">Table 6.</span> Offset-fit cells (29 older quakes) by magnitude and distance in km.</p>
+<h3>Kept apart in time</h3>
+<ul>
+  <li><b>Equation coefficients:</b> training quakes only, up to 2019-07-10.</li>
+  <li><b>DYFI offset:</b> the 29 older DYFI quakes, up to 2024-07-29.</li>
+  <li><b>Scoring:</b> the 28 newer DYFI quakes, from 2024-08-07. They were used for nothing else.</li>
+</ul>
+<p>56 of the 57 DYFI quakes are in our station dataset, all in its test split. The 57th (M&nbsp;4.4 near Indian Springs,
+Nevada, in the scored set) has no records from our stations.</p>
+</section>
+
+<section>
+<div class="kicker">Data validation</div>
+<h2>What the 0.42 means</h2>
+<div class="box">0.42 is the mean absolute error (|estimate &minus; DYFI| averaged over cells), not the signed error. The bias is
++0.14 and 94&nbsp;% of cells are within one level. The reference is USGS &ldquo;Did You Feel It?&rdquo; intensity in 10&nbsp;km
+cells with at least 3 responses, not ShakeMap or station intensities.</div>
+<table>
+<tr><th>Measure (28 scored quakes, 1,892 cells)</th><th>Value</th></tr>
+<tr><th>Mean absolute error, |estimate &minus; CDI|</th><td>0.42</td></tr>
+<tr><th>Signed mean error (bias), estimate &minus; CDI</th><td>+0.14</td></tr>
+<tr><th>Root mean square error</th><td>0.54</td></tr>
+<tr><th>Cells within one level</th><td>93.8&nbsp;%</td></tr>
+<tr><th>Mean absolute error, averaged within each quake first</th><td>0.48</td></tr>
+<tr class="tot"><th>Mean absolute error without the offset</th><td>0.68</td></tr>
+<tr><th>Mean absolute error without the V<sub>S30</sub> site term</th><td>0.40</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 7.</span> The published validation (<code>scripts/validate_mmi.py</code>).</p>
+<ul>
+  <li><b>Reference:</b> USGS DYFI community decimal intensity (CDI) for each 10&nbsp;km cell with at least 3 responses.
+      Not ShakeMap, and not instrumental intensity at stations.</li>
+  <li><b>Inputs at each cell:</b> USGS catalogue magnitude and epicentre, distance from the epicentre to the cell centre,
+      V<sub>S30</sub> at the cell centre. No event correction in the published number (page 8 adds it).</li>
+  <li><b>Weighting:</b> each cell counts once, so large quakes weigh more; the largest supplies 16&nbsp;% of the cells.
+      Averaging within each quake first gives 0.48.</li>
+  <li><b>Site term:</b> the V<sub>S30</sub> term gives no measurable gain on DYFI (0.40 without it). It is kept for physics; to
+      be rechecked with more quakes or point data rather than 10&nbsp;km cells.</li>
+  <li><b>Rounding:</b> the published numbers use the unrounded offset 0.765. The app uses 0.76, which gives MAE 0.42,
+      bias +0.13 and 94.0&nbsp;%. Pages 8&ndash;10 use 0.76.</li>
+</ul>
+</section>
+
+<section>
+<div class="kicker">Calibration</div>
+<h2>The +0.76 offset</h2>
+<div class="box">The median of (DYFI &minus; model) over the 29 older quakes. The 28 test quakes were excluded, and the offset was
+not changed after scoring.</div>
+<div class="eq">offset = median over the 2,088 cells of the 29 older quakes of (CDI &minus; MMI<sub>model</sub>)</div>
+<p>MMI<sub>model</sub> is the Worden conversion of the equation&rsquo;s PGV with the site term, without event correction and
+without offset. The result is 0.765, stored as 0.76. Fitted the same way with each quake&rsquo;s event correction applied,
+the same fit gives 0.43, the offset used in that case (page 9). Each is one constant, with no dependence on magnitude, distance or
+intensity (<code>scripts/validate_mmi.py</code>).</p>
+<h3>What it corrects</h3>
+<p>The Worden et al. (2012) relation was itself derived from about 200,000 DYFI intensities matched to California
+ground-motion records (M&nbsp;3.0&ndash;7.3, under 1 to about 400&nbsp;km). So the offset is not a conversion from instrumental
+to reported intensity; it corrects the whole chain against DYFI. Before the offset the model underestimates DYFI by 0.63
+levels, which on the lower Worden segment equals a factor of about 2.7 in PGV. Possible causes, not tested yet:</p>
+<ul>
+  <li>Our stations sit on stiffer ground than where people live (station median V<sub>S30</sub> 631&nbsp;m/s), and the
+      slope-based V<sub>S30</sub> map captures only part of that.</li>
+  <li>The equation is dominated by M&nbsp;3&ndash;4 records at 50&ndash;200&nbsp;km, while the DYFI quakes are M&nbsp;4&ndash;5.</li>
+  <li>DYFI cells average over 10&nbsp;km, while Worden matched responses within 2&nbsp;km of each station.</li>
+</ul>
+<table>
+<tr><th>DYFI CDI</th><th>Cells</th><th>Bias</th><th>MAE</th></tr>
+{{CDI_ROWS}}
+</table>
+<p class="cap"><span class="tn">Table 8.</span> Error by observed intensity with the offset (configuration C, 27 quakes). A
+single constant offset compresses the scale: weak shaking is overestimated and stronger shaking underestimated.</p>
+</section>
+
+<section>
+<div class="kicker">Calibration</div>
+<h2>Before and after</h2>
+<div class="box">The error at each step, on the 27 test quakes our stations recorded (1,868 cells). The Nevada quake has no
+records from our stations, so it drops out here.</div>
+<p><b>Event correction:</b> for each quake, the mean over our stations that recorded it of
+log<sub>10</sub>(observed&nbsp;PGV / predicted&nbsp;PGV), clipped to &plusmn;0.5 (a factor of about 3). It is added to the predicted
+log<sub>10</sub>&nbsp;PGV everywhere for that quake, like ShakeMap&rsquo;s bias correction. The live system computes it once the
+quake has been sized. Here it was computed from our archived records of each quake (median 7 stations) with the catalogue
+magnitude.</p>
+<table>
+<tr><th>Stage</th><th class="l">Steps</th><th>Offset</th><th>MAE [95% CI]</th><th>Bias [95% CI]</th><th>RMSE</th><th>Within 1</th><th>MAE per quake</th></tr>
+{{STAGED_ROWS}}
+</table>
+<p class="cap"><span class="tn">Table 9.</span> Error at each stage. 95&nbsp;% intervals from a bootstrap that resamples whole
+quakes (2,000 resamples). Bias = estimate &minus; DYFI.</p>
+<figure><img src="fig2_stages.png" alt="MAE and bias with 95 percent intervals for each stage"></figure>
+<p class="cap"><span class="tn">Figure 2.</span> Table 9 as a chart: points are the values, bars the 95&nbsp;% intervals. The
+setup used with the correction (D) is highlighted.
+<ul>
+  <li>The offset does most of the work: A &rarr; C lowers the MAE from 0.68 to 0.42.</li>
+  <li>With a matching offset, adding the event correction gives the same MAE (C vs D) and a smaller bias.</li>
+  <li>D&prime; (0.76 on top of the correction) is the worst setup with an offset, which is why 0.43 is used with the
+      correction (page 9).</li>
+</ul>
+</section>
+
+<section>
+<div class="kicker">Calibration</div>
+<h2>With the event correction: offset 0.43</h2>
+<div class="box">With the event correction, the offset is {{OFF_T}} (D), fitted the same way on the 29 older quakes. The correction already removes part of the
+      underestimate, so 0.76 on top of it (D&prime;) would overestimate by about 0.4 levels.</div>
+<h3>Where it is used</h3>
+<ul>
+  <li><b>Push text (server):</b> <code>live_watch.push_message</code> calls <code>shaking.estimate_mmi</code> with the sized
+      magnitude, the distance to the subscriber&rsquo;s nearest followed station, that station&rsquo;s V<sub>S30</sub> and the
+      event&rsquo;s correction, so the offset is {{OFF_T}}.</li>
+  <li><b>App and Android notification:</b> the same formula on the phone, with the correction sent in the push and the offsets
+      from <code>/api/shaking-model</code>.</li>
+  <li><b>Provisional pushes</b> go out before the full sizing, carry no correction, and so use 0.76 (C).</li>
+</ul>
+<table>
+<tr><th>Difference in MAE</th><th class="l">Comparison</th><th>Value [95% CI]</th></tr>
+{{PAIRED_LIVE}}
+</table>
+<p class="cap"><span class="tn">Table 10.</span> Paired differences on the same cells, quake bootstrap. Positive = D&prime; (0.76 on top of the
+correction) is less accurate. Both intervals exclude zero.</p>
+<h3>How {{OFF_T}} was fitted</h3>
+<p><code>scripts/validate_mmi.py</code> fits it on the 29 older quakes the same way as 0.76, but with each quake&rsquo;s event
+correction applied, so the 28 scored quakes stay untouched. On them it scores MAE 0.42, bias +0.06 and 93.1&nbsp;% within one
+level (27 quakes, 1,868 cells). The calibration file and <code>/api/shaking-model</code> carry it, and the server, the
+app&rsquo;s TypeScript and Android use the same rule, checked by a unit test and a Python-versus-app comparison.</p>
+<p class="small">Not verified: the Android code was not compiled or run.</p>
+</section>
+
+<section>
+<div class="kicker">Calibration</div>
+<h2>What the event correction is for</h2>
+<div class="box">Once the offset is refitted, the event correction does not improve the match to DYFI (C vs D). Its value is that
+it cancels our own magnitude error: a 0.3 error in M moves the estimate by under 0.1 level with it, about 0.4 without.</div>
+<h3>Why it cancels magnitude error</h3>
+<p>The correction is t = mean over stations of [log<sub>10</sub>&nbsp;PGV<sub>obs</sub> &minus; (a + bM + c&thinsp;log<sub>10</sub>R + dR +
+site)]. Adding t to the prediction at any place gives the mean observed log<sub>10</sub>&nbsp;PGV plus the distance and site
+differences between that place and the stations. The b&middot;M term drops out, so an error in our magnitude does not change
+the estimate, unless t reaches its &plusmn;0.5 clip.</p>
+<table>
+<tr><th>Magnitude shifted by</th><th>With event correction</th><th>Without</th></tr>
+<tr><th>+0.3</th><td>0.001</td><td>0.42</td></tr>
+<tr><th>&minus;0.3</th><td>0.07</td><td>0.37</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 11.</span> Mean change in the estimated MMI at the scored DYFI cells. For quakes whose
+correction is not clipped the change is exactly 0 (about 10<sup>&minus;15</sup>); the non-zero means come from clipped quakes.</p>
+<h3>Why it does not improve the DYFI score</h3>
+<table>
+<tr><th>Difference in MAE</th><th class="l">Comparison</th><th>Value [95% CI]</th></tr>
+{{PAIRED_TERM}}
+</table>
+<p class="cap"><span class="tn">Table 12.</span> Paired differences on the same cells, quake bootstrap. Negative = the first
+configuration is more accurate.</p>
+<ul>
+  <li>On its own the correction removes about 40&nbsp;% of the raw bias (&minus;0.63 &rarr; &minus;0.37) and lowers the MAE by
+      0.18. Once an offset is fitted for it, the gain is gone (D&nbsp;&minus;&nbsp;C is +0.00).</li>
+  <li>Most of the DYFI error is cell-to-cell scatter within one quake (local ground, buildings, who reports), which one
+      number per quake cannot remove.</li>
+  <li>This test used catalogue magnitudes, which are already accurate, so the cancellation had little to fix. Its benefit
+      shows up live, where our own magnitude can be off.</li>
+</ul>
+</section>
+
+<section>
+<div class="kicker">Implementation</div>
+<h2>Very close to the quake</h2>
+<div class="box">The formula measures distance along the ground from the epicentre (the point on the surface
+      above the quake) and never lets it drop below 1&nbsp;km. It ignores depth, although a typical quake starts about 6&ndash;7&nbsp;km
+      down, so right above a quake its prediction keeps climbing even though the quake is still several km below you. We have
+      almost no recordings within 5&nbsp;km to check this, and at 5&ndash;20&nbsp;km the formula predicts only about half of what
+      our stations recorded. The usual fix is to count the depth in the distance.</div>
+<ul>
+  <li>R = max(R<sub>epi</sub>, 1&nbsp;km). There is no hypocentral or rupture distance, no fictitious depth and no magnitude
+      saturation. Catalogue depths have a median of 6.5&nbsp;km.</li>
+  <li>The prediction keeps rising as R<sup>&minus;0.87</sup> down to 1&nbsp;km: &times;4.2 between 5 and 1&nbsp;km, &times;8.1
+      between 10 and 1&nbsp;km. Physically, within about one focal depth of the epicentre the distance to the source hardly
+      changes.</li>
+  <li>Data: 7 training records within 5&nbsp;km and 41 at 5&ndash;10&nbsp;km; no test record within 5&nbsp;km. Against DYFI,
+      the 31 cells within 10&nbsp;km show a bias of &minus;0.05 to +0.18 (Table 14), but that is too few to judge.</li>
+  <li>For large magnitudes close in, the equation is outside its calibrated range (Table 15): only 29 training quakes are
+      M&nbsp;5 or larger, and the DYFI check reaches M&nbsp;5.2.</li>
+</ul>
+<div class="two">
+<div>
+<table>
+<tr><th>Distance (km)</th><th>Records</th><th>Mean residual</th><th>SD</th><th>SD after correction</th></tr>
+<tr><th>5&ndash;10</th><td>14</td><td>+0.325</td><td>0.323</td><td>0.215</td></tr>
+<tr><th>10&ndash;20</th><td>97</td><td>+0.294</td><td>0.347</td><td>0.300</td></tr>
+<tr><th>20&ndash;50</th><td>646</td><td>+0.058</td><td>0.354</td><td>0.276</td></tr>
+<tr><th>50&ndash;100</th><td>2,118</td><td>+0.016</td><td>0.320</td><td>0.257</td></tr>
+<tr><th>100&ndash;200</th><td>3,322</td><td>+0.029</td><td>0.326</td><td>0.273</td></tr>
+<tr class="tot"><th>All</th><td>6,197</td><td></td><td>0.329</td><td>0.270</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 13.</span> Held-out test records: residual = log<sub>10</sub>(observed / predicted PGV);
+positive = the equation underestimates.</p>
+</div>
+<div>
+<table>
+<tr><th>Distance (km)</th><th>Cells</th><th>Bias</th><th>MAE</th></tr>
+{{DIST_ROWS}}
+</table>
+<p class="cap"><span class="tn">Table 14.</span> DYFI error by distance, configuration C (27 quakes).</p>
+</div>
+</div>
+<table>
+<tr><th>Magnitude</th><th>1 km</th><th>5 km</th><th>10 km</th><th>20 km</th><th>50 km</th></tr>
+{{PRED_ROWS}}
+</table>
+<p class="cap"><span class="tn">Table 15.</span> Predicted PGV (cm/s) / MMI before the offset, on reference ground
+(V<sub>S30</sub> 631&nbsp;m/s), without event correction. * = clamped at MMI&nbsp;1 or 10.</p>
+</section>
+
+<section>
+<div class="kicker">Implementation</div>
+<h2>PGV and its units</h2>
+<div class="box">PGV (peak ground velocity) is the fastest the ground moved. Each station records three directions
+      (up-down, north-south, east-west), and we take the single largest value of the three, which is almost always a sideways
+      one (up-down is largest in only 7&nbsp;% of recordings). The formula works in metres per second; the Worden conversion
+      needs centimetres per second, so the value is multiplied by 100.</div>
+<p>The same code processes the training data and the live stream:</p>
+<ol>
+  <li>Raw counts from the SCEDC archive (training) or the public SeedLink relay (live); HH channels at 100&nbsp;Hz
+      (the pre-2010 archive is BH at 40&nbsp;Hz).</li>
+  <li>Mean removed; instrument response removed to ground velocity (ObsPy, water level 60&nbsp;dB), with no pre-filter or
+      high-pass; resampled to 100&nbsp;Hz where needed.</li>
+  <li>Causal 4th-order Butterworth low-pass at 18&nbsp;Hz, a common band for the 40&nbsp;Hz and 100&nbsp;Hz sources.</li>
+  <li>A window around the P arrival: P&nbsp;&minus;&nbsp;6&nbsp;s to P&nbsp;+&nbsp;26&nbsp;s in training,
+      P&nbsp;&minus;&nbsp;5&nbsp;s to P&nbsp;+&nbsp;25&nbsp;s live.</li>
+  <li>PGV = the largest absolute value over all three components and the whole window.</li>
+</ol>
+<ul>
+  <li><b>Component:</b> the peak over three components, including the vertical. It is not the geometric mean of the
+      horizontals and not the vector sum. The vertical was the largest in 7.3&nbsp;% of records and raises PGV by
+      0.007 log<sub>10</sub> on average (1.7&nbsp;%, about 0.01 MMI), so in practice this is the larger horizontal peak.
+      Worden&rsquo;s own component definition is still to be confirmed in the paper.</li>
+  <li><b>Units:</b> m/s in the equation; multiplied by 100 to cm/s for the Worden conversion.</li>
+  <li><b>Live vs training window:</b> PGV is identical in 93.2&nbsp;% of training records. At 150&nbsp;km and beyond it is
+      0.027 log<sub>10</sub> (6&nbsp;%) lower on average in the live window, because that window ends 1&nbsp;s earlier and can
+      cut the late S wave. Small, but it is a difference between training and live input.</li>
+</ul>
+</section>
+
+<section>
+<div class="kicker">Implementation</div>
+<h2>Weak shaking</h2>
+<div class="box">Worden&rsquo;s conversion from PGV to intensity is two straight lines, a gentle one for weak shaking
+      (up to 3.4&nbsp;cm/s) and a steeper one above, and the result is capped between I and X. USGS ShakeMap adds a third line
+      for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.47 vs 0.42), so we left it
+      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking one shows
+      level II and the other level I; both read &ldquo;Not felt&rdquo;.</div>
+<div class="eq">MMI = 3.78 + 1.47&middot;log<sub>10</sub> PGV &nbsp; for log<sub>10</sub> PGV &le; 0.53 (PGV &le; 3.4 cm/s, MMI &le; 4.56)<br>
+MMI = 2.89 + 3.16&middot;log<sub>10</sub> PGV &nbsp; above that &nbsp;&nbsp;(PGV in cm/s)</div>
+<ul>
+  <li>The coefficients match the USGS ShakeMap implementation (<code>wgrw12.py</code>). We use the plain form, without
+      Worden&rsquo;s magnitude and distance terms (in ShakeMap: C5 = 0.90, C6 = 0.00, C7 = &minus;0.18, applied for
+      10&ndash;300&nbsp;km and M&nbsp;3.0&ndash;7.3).</li>
+  <li>Low end: the lower segment is used as published, down to PGV = 0.013&nbsp;cm/s, where MMI reaches 1.</li>
+  <li>Where it matters: 897 of the 1,868 scored cells (48&nbsp;%) have a model MMI below 2 before the offset, and none below 1.
+      On reference ground the floor is reached beyond about 17&nbsp;km for M&nbsp;3.0, 45&nbsp;km for M&nbsp;3.5 and 92&nbsp;km for
+      M&nbsp;4.0.</li>
+  <li>USGS ShakeMap adds a third segment for MMI 1&ndash;2: MMI = 4.62 + 2.17&middot;log<sub>10</sub> PGV below
+      log<sub>10</sub> PGV = &minus;1.21 (PGV &lt; 0.062&nbsp;cm/s). Its source code calls this the range &ldquo;discussed in the paper
+      but not specifically implemented there&rdquo;. Tested on the 28 scored quakes, it is worse (Table 16), so we keep two
+      segments.</li>
+</ul>
+<table>
+<tr><th>Low end</th><th>Offset (refitted)</th><th>MAE</th><th>Bias</th><th>Within one level</th></tr>
+<tr><th>Two segments (current)</th><td>0.76</td><td>0.42</td><td>+0.13</td><td>94.0&nbsp;%</td></tr>
+<tr><th>Three segments (ShakeMap)</th><td>0.91</td><td>0.47</td><td>+0.22</td><td>91.0&nbsp;%</td></tr>
+</table>
+<p class="cap"><span class="tn">Table 16.</span> The two forms on the 28 scored quakes, each with its offset fitted on the 29
+older quakes.</p>
+<h3>The clamping bug</h3>
+<p>The Python code (server push wording, validation) clamps to 1 before adding the offset, so its lowest output is 1.76
+(level II). The app and the Android code add the offset first, so their lowest is 1.0 (level I). A test over 315 cases found
+differences only where the model MMI is at the floor (109 cases). There is no visible effect today, because levels I and II
+share the label &ldquo;Not felt&rdquo;, but the code should be aligned.</p>
+<p class="small" style="margin-top:18px"><b>References.</b> Worden, C. B., M. C. Gerstenberger, D. A. Rhoades and D. J. Wald
+(2012). Probabilistic relationships between ground-motion parameters and Modified Mercalli intensity in California.
+<i>BSSA</i> 102(1), doi:10.1785/0120110156. &middot; USGS ShakeMap <code>esi-shakelib</code>, <code>gmice/wgrw12.py</code>.
+&middot; USGS &ldquo;Did You Feel It?&rdquo; 10&nbsp;km geocoded intensity (<code>dyfi_geo_10km.geojson</code>), via ComCat.</p>
+</section>
+
+</body>
+</html>
