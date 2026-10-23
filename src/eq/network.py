@@ -6,7 +6,7 @@ five stations that never streamed live (CCC, CLC, TOW2, WBM, RIO are archived at
 relayed on IRIS's public SeedLink), which is how the live network silently shrank to 5 stations.
 
 Selection rules (reproduce with scripts/select_network.py):
-  - streams HH? on rtserve.iris.washington.edu (checked by the builder before every build);
+  - streams HH? on rtserve.earthscope.org (checked by the builder before every build);
   - recording since <= 2010 (>= 15 years of training data);
   - quiet: median 2-8 Hz noise <= 1e-7 m/s over 4 times of day (BAK, ADO, VTV, USC ... excluded);
   - >= ~44 km apart (most pairs > 50 km), so neighbours cannot "confirm" each other on shared local (cultural) noise;

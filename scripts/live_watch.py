@@ -458,7 +458,7 @@ def selftest(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="rtserve.iris.washington.edu:18000")
+    ap.add_argument("--server", default="rtserve.earthscope.org:18000")
     ap.add_argument("--dry-run", action="store_true", help="print pushes instead of sending")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()

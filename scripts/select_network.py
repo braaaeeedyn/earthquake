@@ -36,7 +36,7 @@ CITIES = {"Los Angeles": (34.05, -118.24), "San Diego": (32.72, -117.16), "River
 def candidates():
     from obspy.clients.fdsn import Client
     from obspy.clients.seedlink.basic_client import Client as SL
-    info = SL("rtserve.iris.washington.edu", 18000, timeout=60).get_info(network="CI", station="*", level="channel")
+    info = SL("rtserve.earthscope.org", 18000, timeout=60).get_info(network="CI", station="*", level="channel")
     codes = sorted({r[1] for r in info if r[3] == "HHZ"})
     inv = Client("SCEDC", timeout=120).get_stations(network="CI", station=",".join(codes), channel="HHZ", level="channel")
     return {s.code: {"lat": s.latitude, "lon": s.longitude,

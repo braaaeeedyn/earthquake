@@ -59,7 +59,7 @@ daemon, the API, the scorer and the replay harness all import it.
 How the stations were chosen (`scripts/select_network.py` reproduces it):
 
 - **Streams in real time:** the station sends HH channels on the public relay
-  `rtserve.iris.washington.edu`. `build_dataset.py --stage check` refuses to build otherwise.
+  `rtserve.earthscope.org`. `build_dataset.py --stage check` refuses to build otherwise.
 - **Enough history:** HH data back to 2010 or earlier, so there are years to train on.
 - **Quiet:** median 2–8 Hz ground noise ≤ 1e-7 m/s, measured at four times of day.
 - **Spread out:** at least about 44 km apart, so neighbours can't "confirm" each other on shared

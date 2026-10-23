@@ -63,7 +63,7 @@ MAG_PRE, MAG_LEN = int(6 * SR), int(32 * SR)            # magnitude: P-6 s .. P+
 
 # ---------------------------------------------------------------- check
 
-def check_seedlink(server="rtserve.iris.washington.edu", port=18000):
+def check_seedlink(server="rtserve.earthscope.org", port=18000):
     from obspy.clients.seedlink.basic_client import Client as SL
     info = SL(server, port, timeout=60).get_info(network=network.NET, station="*", level="channel")
     have = {(r[1], r[2]) for r in info if r[3] == "HHZ"}
