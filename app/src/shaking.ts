@@ -11,6 +11,7 @@ export interface ShakingModel {
   site: { vs30_ref: number; e: number }
   worden: { lo: [number, number]; hi: [number, number]; brk: number }
   mmi_offset?: number
+  mmi_offset_term?: number      // offset when a measured event term is applied (older servers: absent)
   levels: { mmi: number; label: string; desc: string }[]
   residual_sd_log10?: number | null
   validation?: { mae: number; within1: number; n_cells: number; n_quakes: number } | null
@@ -57,7 +58,9 @@ export function estimateMMI(m: ShakingModel, mag: number, distKm: number, vs30: 
   if (vs30) logPgv += m.site.e * Math.log10(vs30 / m.site.vs30_ref)
   const y = logPgv + 2                                                      // log10(PGV in cm/s)
   const [a, b] = y > m.worden.brk ? m.worden.hi : m.worden.lo
-  return Math.max(1, Math.min(10, a + b * y + (m.mmi_offset ?? 0)))   // + DYFI-calibrated offset (validate_mmi.py)
+  // + DYFI-calibrated offset (validate_mmi.py); a measured event term has its own, smaller one
+  const offset = eventTerm ? (m.mmi_offset_term ?? m.mmi_offset ?? 0) : (m.mmi_offset ?? 0)
+  return Math.max(1, Math.min(10, a + b * y + offset))
 }
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']

@@ -86,7 +86,9 @@ public class QuakeMessagingService extends FirebaseMessagingService {
         if (vs30 > 0) logPgv += s.getDouble("e") * Math.log10(vs30 / s.getDouble("vs30_ref"));
         double y = logPgv + 2;                       // log10(PGV cm/s)
         JSONArray ab = y > w.getDouble("brk") ? w.getJSONArray("hi") : w.getJSONArray("lo");
-        return Math.max(1, Math.min(10, ab.getDouble(0) + ab.getDouble(1) * y + m.optDouble("mmi_offset", 0)));
+        double base = m.optDouble("mmi_offset", 0);   // a measured event term has its own, smaller offset
+        double offset = term != 0 ? m.optDouble("mmi_offset_term", base) : base;
+        return Math.max(1, Math.min(10, ab.getDouble(0) + ab.getDouble(1) * y + offset));
     }
 
     static double haversineKm(double aLat, double aLon, double bLat, double bLon) {

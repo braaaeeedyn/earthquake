@@ -173,7 +173,8 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 ### Shaking at your location (MMI, 2026-10-07; HOW_IT_WORKS §13)
 - `src/eq/shaking.py` = the one model: log10 PGV = a + bM + c log R + dR + e log(Vs30/631) + event_term
   (fit `calibrate_shaking.py` on v2 train events; test scatter 0.33 log10), Worden 2012 PGV→MMI, + DYFI
-  `mmi_offset` 0.76. Same equations in `app/src/shaking.ts` and `app/native/android/QuakeMessagingService.java`,
+  `mmi_offset` 0.76, or `mmi_offset_term` 0.43 when an event term is applied (2026-10-23 fix: 0.76 on top of the term
+  overestimated ~0.4 levels; both fitted by `validate_mmi.py`, the term from our v2 station records). Same equations in `app/src/shaking.ts` and `app/native/android/QuakeMessagingService.java`,
   coefficients served by `/api/shaking-model` so all three stay identical.
 - Vs30: USGS global slope-proxy grid cropped to SoCal → `app/public/vs30_socal.json` (0.02°, + station_vs30).
 - Event term = clipped (±0.5) mean log residual of observed PGV at the sized stations (`Event.pgv_term`).
@@ -193,6 +194,10 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
 - **Daemon checks:** `python scripts/live_watch.py --selftest`; `pytest` (32 tests); `ruff check scripts src tests`.
 - **Shaking (MMI):** `python scripts/calibrate_shaking.py` (fit on v2 train events) → `python scripts/validate_mmi.py`
   (DYFI offset + held-out score; writes both into `data/processed/shaking_calibration.json`).
+  Reviewer PDFs (`MMI_summary_2026-10-23.pdf` 1 page, `MMI_3page_2026-10-23.pdf` 1 page per section,
+  `MMI_details_2026-10-23.pdf` 1 page per summary point): `python scripts/mmi_review.py` → `python scripts/build_mmi_notes.py`
+  (cache + figures in `data/processed/mmi_notes/`, prose in `scripts/mmi_{summary,3page,details}_template.html`, printed by
+  headless Edge; the build fails if a page overflows).
 - **Long jobs on this PC:** launch detached (`Start-Process powershell -WindowStyle Hidden -File <job>.ps1`), log to a
   file, make them resumable — Claude Code's own background shells get reaped under low RAM. Examples:
   `data/processed/v2/replay/bigtest/run_bigtest.ps1`, `.../swarmtune/run_swarmtune.ps1`. Don't auto-restart a reaped job.
@@ -265,6 +270,9 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
   checkpoint sha256 on the VM (DEPLOY.md).
 
 ### Open TODOs
+- **Offset fix (2026-10-23):** code + site ship with CI; the VM also needs the new
+  `data/processed/shaking_calibration.json` (scp, verify sha256; without `mmi_offset_term` the server falls back to 0.76
+  for both). Phones get it (app + native notification) only with the next APK release.
 - **Pushes ON — re-check 2026-10-12:** rerun `crosscheck_events.py --log <VM events.jsonl> --since 2026-10-08T02:40`
   + `data/processed/push_check/magcheck.py <log>` (confirmed vs USGS magnitude). 2026-10-09 check (1.8 days):
   confirmed precision 0.88 (chance 0.00), ~9 confirmed/day, 1 push-eligible (3.02 vs USGS 3.16); magnitude bias

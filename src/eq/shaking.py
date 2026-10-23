@@ -6,8 +6,9 @@
   e is the site term (soft ground = low Vs30 shakes harder), Vs30 from the USGS map (app/public/vs30_socal.json).
 - event_term: how much harder/softer THIS quake actually shook our stations than the equation predicts (the
   mean log residual over the sized stations, ShakeMap-style bias correction), computed at sizing time.
-- PGV -> MMI: Worden et al. (2012) bilinear relation, valid down to weak shaking, plus mmi_offset: people's reports
-  (USGS Did You Feel It?) run higher than instrumental intensity; fitted by scripts/validate_mmi.py.
+- PGV -> MMI: Worden et al. (2012) bilinear relation, valid down to weak shaking, plus an offset to what people report
+  (USGS Did You Feel It?), fitted by scripts/validate_mmi.py: mmi_offset without an event term, mmi_offset_term with
+  one (the event term already removes part of the same underestimate, so adding the full mmi_offset overshoots).
 
 Used by the live daemon (push wording, event term) and, as the same equations in app/src/shaking.ts, by the app to
 estimate shaking at the user's home ON THE DEVICE (the location never leaves the phone). The equations and
@@ -61,9 +62,15 @@ def pgv_to_mmi(pgv_ms):
     return max(1.0, min(10.0, a + b * y))
 
 
+def _offset(event_term):
+    base = CAL.get("mmi_offset", 0.0)
+    return CAL.get("mmi_offset_term", base) if event_term else base     # old calibration file: same offset for both
+
+
 def estimate_mmi(mag, dist_km, vs30=None, event_term=0.0, offset=None):
-    """MMI people would report: instrumental MMI + the DYFI-calibrated offset (offset=0.0 gives the raw value)."""
-    off = CAL.get("mmi_offset", 0.0) if offset is None else offset
+    """MMI people would report: instrumental MMI + the DYFI-calibrated offset (offset=0.0 gives the raw value).
+    A non-zero event_term means a measured correction is applied, which has its own offset."""
+    off = _offset(event_term) if offset is None else offset
     return max(1.0, min(10.0, pgv_to_mmi(estimate_pgv(mag, dist_km, vs30, event_term)) + off))
 
 
@@ -86,6 +93,6 @@ def event_term(mag, dist_km, pgv_obs, station_codes):
 def model_for_clients():
     """The equations' coefficients for /api/shaking-model (the app computes the home estimate itself)."""
     return {"gmpe": CAL["gmpe"], "site": CAL["site"], "worden": WORDEN, "event_term_clip": EVENT_TERM_CLIP,
-            "mmi_offset": CAL.get("mmi_offset", 0.0),
+            "mmi_offset": _offset(0.0), "mmi_offset_term": _offset(1.0),
             "levels": [{"mmi": m, "label": lab, "desc": d} for m, lab, d in LEVELS],
             "residual_sd_log10": CAL.get("residual_sd_log10_test"), "validation": CAL.get("validation")}

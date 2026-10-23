@@ -31,6 +31,16 @@ def test_push_message_shapes():
     assert "notification" not in only and only["data"]["title"] == "T" and only["data"]["tag"] == "quake-e1"
 
 
+def test_event_term_uses_its_own_offset(monkeypatch):
+    monkeypatch.setattr(shaking, "CAL", {**shaking.CAL, "mmi_offset": 0.76, "mmi_offset_term": 0.43})
+    raw = lambda term: shaking.estimate_mmi(4.5, 30, 400, term, offset=0.0)  # noqa: E731
+    assert abs(shaking.estimate_mmi(4.5, 30, 400) - raw(0.0) - 0.76) < 1e-9          # no correction: 0.76
+    assert abs(shaking.estimate_mmi(4.5, 30, 400, 0.2) - raw(0.2) - 0.43) < 1e-9     # correction applied: 0.43
+    assert shaking.model_for_clients()["mmi_offset_term"] == 0.43
+    monkeypatch.setattr(shaking, "CAL", {k: v for k, v in shaking.CAL.items() if k != "mmi_offset_term"})
+    assert abs(shaking.estimate_mmi(4.5, 30, 400, 0.2) - raw(0.2) - 0.76) < 1e-9     # old calibration file
+
+
 def test_rounding_matches_the_app():
     assert shaking.describe(2.5)[0] == "Weak" and shaking.describe(2.49)[0] == "Not felt"
 

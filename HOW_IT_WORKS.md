@@ -770,8 +770,9 @@ the native notification — all reading the same coefficients from `/api/shaking
 3. **Event term** (live quakes only): after full sizing, the mean log residual of the observed peak velocity at the
    sized stations vs the equation, clipped to ±0.5 (`Event.pgv_term`, logged in `events.jsonl` and sent with each
    push). It corrects a quake that shook harder or softer than average, like ShakeMap's bias correction.
-4. PGV → MMI: Worden et al. (2012) bilinear relation, plus a **+0.76 offset**: people's "Did You Feel It?" reports
-   run higher than instrument-based intensity at these small magnitudes.
+4. PGV → MMI: Worden et al. (2012) bilinear relation, plus an offset fitted to "Did You Feel It?" reports: **+0.76**
+   without an event term, **+0.43** with one (`mmi_offset_term`), because the event term already removes part of the
+   same underestimate.
 
 **Validation** (`scripts/validate_mmi.py` → `data/processed/mmi_validation.json`): USGS DYFI 10 km cells
 (≥ 3 responses) for SoCal M3.5+ quakes in the held-out period (2022-04-15 … 2026-08-31). The offset is fitted on
@@ -780,6 +781,7 @@ the older 29 quakes and scored once on the newer **28 quakes / 1,892 cells**:
 | | MAE (MMI levels) | within 1 level |
 |---|---|---|
 | this model | **0.42** (bias +0.14) | **93.8%** |
+| with the event term (offset 0.43; 27 quakes / 1,868 cells our stations recorded) | 0.42 (bias +0.06) | 93.1% |
 | without the DYFI offset | 0.68 | — |
 | without the site term | 0.40 | — |
 
