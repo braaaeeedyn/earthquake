@@ -190,13 +190,11 @@ predicted. 1.0&times; means exactly right.</p>
 <ul>
   <li><b>What it is:</b> Worden et al. (2012), the same conversion USGS ShakeMap uses: a gentle straight line for weak shaking
       and a steeper one for strong shaking. Before the offset, 0.1&nbsp;cm/s gives 2.3, 1&nbsp;cm/s gives 3.8 and 10&nbsp;cm/s
-      gives 6.05. The result is capped between 1 and 10, so 0.01&nbsp;cm/s (which would give 0.8) becomes 1.</li>
+      gives 6.05. The result is capped between 1 and 10, so 0.01&nbsp;cm/s (which would give 0.8) becomes 1;
+      the offset is then added and the total capped again, the same way in the server, the app and Android.</li>
   <li><b>The weakest shaking:</b> about a third of the DYFI test areas are below level 2 before the offset. ShakeMap adds a third
       line for levels 1&ndash;2; we tried it and it matched people&rsquo;s reports worse (error 0.46 vs 0.42, 92&nbsp;% vs 93&nbsp;%
       within one level), so we kept the two published lines.</li>
-  <li><b>Small bug:</b> the server applies the 1&ndash;10 cap before adding the offset and the app after, so for the very
-      weakest shaking their numbers differ slightly (server 1.43, app 1.0). Both round to level I, &ldquo;Not felt&rdquo;, so
-      nothing visible changes, but the two should match.</li>
 </ul>
 <p class="small" style="margin-top:10px"><b>References.</b> Worden, Gerstenberger, Rhoades and Wald (2012), <i>BSSA</i> 102(1),
 doi:10.1785/0120110156. &middot; USGS ShakeMap <code>esi-shakelib</code>, <code>gmice/wgrw12.py</code>. &middot; USGS &ldquo;Did You

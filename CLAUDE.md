@@ -275,7 +275,9 @@ Caddy + systemd; SSH key `~/.ssh/oracle_seismic` has a passphrase, so every SSH 
 ### Open TODOs
 - **MMI offset 0.43 with the event term — LIVE on the server 2026-10-23** (commit bf2bab5; VM `shaking_calibration.json`
   scp'd, sha256 verified, previous file at `shaking_calibration.json.bak-2026-10-23`; `/api/shaking-model` serves
-  `mmi_offset_term` 0.43). Phones get it (app + native notification) only with the next APK release — not done yet.
+  `mmi_offset_term` 0.43). App + Android also cap the Worden MMI to I–X before adding the offset, as the server does
+  (same day; matches Python on 300 test cases). Phones get both (app + native notification) only with the next APK
+  release — not done yet.
 - **ARV not streaming** (see Deployed): check whether it moved location code or is just down; `build_dataset.py --stage check`.
 - **Pushes ON — re-check 2026-10-12:** rerun `crosscheck_events.py --log <VM events.jsonl> --since 2026-10-08T02:40`
   + `data/processed/push_check/magcheck.py <log>` (confirmed vs USGS magnitude). 2026-10-09 check (1.8 days):

@@ -58,9 +58,10 @@ export function estimateMMI(m: ShakingModel, mag: number, distKm: number, vs30: 
   if (vs30) logPgv += m.site.e * Math.log10(vs30 / m.site.vs30_ref)
   const y = logPgv + 2                                                      // log10(PGV in cm/s)
   const [a, b] = y > m.worden.brk ? m.worden.hi : m.worden.lo
+  const worden = Math.max(1, Math.min(10, a + b * y))                       // capped to I-X first, as the server does
   // + DYFI-calibrated offset (validate_mmi.py); a measured event term has its own, smaller one
   const offset = eventTerm ? (m.mmi_offset_term ?? m.mmi_offset ?? 0) : (m.mmi_offset ?? 0)
-  return Math.max(1, Math.min(10, a + b * y + offset))
+  return Math.max(1, Math.min(10, worden + offset))
 }
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']

@@ -406,15 +406,16 @@ positive = the equation underestimates.</p>
 <div class="box">Worden&rsquo;s conversion from PGV to intensity is two straight lines, a gentle one for weak shaking
       (up to 3.4&nbsp;cm/s) and a steeper one above, and the result is capped between I and X. USGS ShakeMap adds a third line
       for the very weakest shaking; we tried it and it matched people&rsquo;s reports worse (error 0.46 vs 0.42), so we left it
-      out. Small bug: the server and the app apply the cap in a different order, so for the very weakest shaking their
-      numbers differ slightly; both still show level I, &ldquo;Not felt&rdquo;.</div>
+      out.</div>
 <div class="eq">MMI = 3.78 + 1.47&middot;log<sub>10</sub> PGV &nbsp; for log<sub>10</sub> PGV &le; 0.53 (PGV &le; 3.4 cm/s, MMI &le; 4.56)<br>
 MMI = 2.89 + 3.16&middot;log<sub>10</sub> PGV &nbsp; above that &nbsp;&nbsp;(PGV in cm/s)</div>
 <ul>
   <li>The coefficients match the USGS ShakeMap implementation (<code>wgrw12.py</code>). We use the plain form, without
       Worden&rsquo;s magnitude and distance terms (in ShakeMap: C5 = 0.90, C6 = 0.00, C7 = &minus;0.18, applied for
       10&ndash;300&nbsp;km and M&nbsp;3.0&ndash;7.3).</li>
-  <li>Low end: the lower segment is used as published, down to PGV = 0.013&nbsp;cm/s, where MMI reaches 1.</li>
+  <li>Low end: the lower segment is used as published, down to PGV = 0.013&nbsp;cm/s, where MMI reaches 1. The Worden
+      value is capped to 1&ndash;10, the offset is added, and the total is capped again; the server, the app and Android all
+      do it this way.</li>
   <li>Where it matters: with the event correction, 654 of the 1,868 scored cells (35&nbsp;%) have a model MMI below 2
       before the offset, and 56 sit at the floor of 1.
       On reference ground the floor is reached beyond about 17&nbsp;km for M&nbsp;3.0, 45&nbsp;km for M&nbsp;3.5 and 92&nbsp;km for
@@ -431,10 +432,6 @@ MMI = 2.89 + 3.16&middot;log<sub>10</sub> PGV &nbsp; above that &nbsp;&nbsp;(PGV
 </table>
 <p class="cap"><span class="tn">Table 15.</span> The two forms on the 27 scored quakes our stations recorded, with the event
 correction, each with its offset fitted on the 29 older quakes.</p>
-<h3>The clamping bug</h3>
-<p>The Python code (server push wording, validation) clamps to 1 before adding the offset, so its lowest output is 1.43.
-The app and the Android code add the offset first, so their lowest is 1.0. Both round to level I (&ldquo;Not felt&rdquo;), so
-the level shown is the same, but the code should be aligned.</p>
 <p class="small" style="margin-top:18px"><b>References.</b> Worden, C. B., M. C. Gerstenberger, D. A. Rhoades and D. J. Wald
 (2012). Probabilistic relationships between ground-motion parameters and Modified Mercalli intensity in California.
 <i>BSSA</i> 102(1), doi:10.1785/0120110156. &middot; USGS ShakeMap <code>esi-shakelib</code>, <code>gmice/wgrw12.py</code>.
