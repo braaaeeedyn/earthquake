@@ -227,6 +227,10 @@ Current numbers — **v2 dataset on the live network** (19 stations, 2000 → Au
   the real defaults are 30 s / 60 km.
 - `shaking_calibration.json` is gitignored data that ships by scp. `shaking.load()` falls back to the built-in v2
   coefficients if it finds the pre-v2 file (no `site` key) — the VM had that file until 2026-10-07.
+- **MLflow server jobs are OFF** (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` in `deploy/mlflow.service`). MLflow 3.16
+  starts huey job workers on any DB backend; their queue in `/dev/shm` was wiped by logind `RemoveIPC` and they
+  crash-looped at ~100% CPU for most of Oct 2026 (fixed 2026-11-08; journald now capped at 500M). The VM also has
+  the same line as a drop-in, `/etc/systemd/system/mlflow.service.d/no-jobs.conf` (redundant, harmless).
 - **Width breakpoints are `@container (max-width: …)` on `<body>`, never `@media`.** In the Android app the system
   font size is applied as a whole-page CSS zoom (`main.tsx` + `QuakeNativePlugin`), and `@media` would still see the
   unzoomed screen width. Layout must hold down to 280 CSS px (the zoom cap).

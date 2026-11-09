@@ -10,6 +10,9 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/mlflow
 Environment=MLFLOW_DISABLE_AGENT_HINT=1
+# We use no server jobs; on a sqlite backend their huey queue lives in /dev/shm, which logind's RemoveIPC wipes on
+# logout, and the consumers then crash-loop at ~100% CPU (2026-11-08).
+Environment=MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false
 ExecStart=/opt/mlflow/.venv/bin/mlflow server --host 127.0.0.1 --port 5000 --workers 1 \
     --backend-store-uri sqlite:////opt/mlflow/mlflow.db \
     --artifacts-destination /opt/mlflow/artifacts --serve-artifacts \
