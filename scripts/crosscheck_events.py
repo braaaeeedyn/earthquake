@@ -23,6 +23,8 @@ import argparse
 import json
 import math
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -31,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EVENTS_LOG = ROOT / "data" / "processed" / "events.jsonl"
 FDSN = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+RETRY_WAIT_S = 30
 LIVE_SINCE = 1791191580.0       # 2026-10-05 09:13 UTC: the live 19-station pipeline (v2) started logging
 
 
@@ -70,8 +73,14 @@ def usgs_query(params):
     params = {"format": "geojson", **params}
     req = urllib.request.Request(FDSN + "?" + urllib.parse.urlencode(params),
                                  headers={"User-Agent": "seismicsocal-crosscheck/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:      # USGS rate-limits (429) and has brief 5xx outages
+            if attempt == 4 or (e.code != 429 and e.code < 500):
+                raise
+            time.sleep(RETRY_WAIT_S * (attempt + 1))
 
 
 def iso(epoch):
@@ -106,18 +115,40 @@ def ev_time_loc(ev):
     return ev["epoch"], ev["proxy_lat"], ev["proxy_lon"]
 
 
-def match_real_for_declared(ev, time_tol, dist_tol, shift=0.0, min_mag=1.0):
+def catalog_for(events, time_tol, dist_tol, min_mag, max_shift=3600.0):
+    """ONE catalog request covering every declared event (and its +max_shift chance copy), as GeoJSON
+    features. Two requests per event got the nightly job rate-limited (HTTP 429) once the log grew.
+    ponytail: USGS answers HTTP 400 above 20k rows (about a year of SoCal M1+); split the window by
+    time then, as src/eq/catalog.py does."""
+    tll = [ev_time_loc(ev) for ev in events]
+    lats, lons = [x[1] for x in tll], [x[2] for x in tll]
+    dlat = dist_tol / 111.0
+    dlon = dlat / math.cos(math.radians(min(89.0, max(abs(v) for v in lats) + dlat)))
+    g = usgs_query({"starttime": iso(min(x[0] for x in tll) - time_tol - 1),
+                    "endtime": iso(max(x[0] for x in tll) + max_shift + time_tol + 1),
+                    "minmagnitude": min_mag,
+                    "minlatitude": min(lats) - dlat, "maxlatitude": max(lats) + dlat,
+                    "minlongitude": min(lons) - dlon, "maxlongitude": max(lons) + dlon})
+    return g.get("features", [])
+
+
+def match_real_for_declared(ev, time_tol, dist_tol, shift=0.0, min_mag=1.0, catalog=None):
     """The real quake (>= min_mag) nearest in time to a declared event within (time_tol, dist_tol),
-    or None. `shift` moves the declaration in time -- with shift=3600 this measures CHANCE matches."""
+    or None. `shift` moves the declaration in time -- with shift=3600 this measures CHANCE matches.
+    With `catalog` (catalog_for's features) it matches locally; without, it asks USGS for this event."""
     t, lat, lon = ev_time_loc(ev)
     t += shift
-    g = usgs_query({"starttime": iso(t - time_tol), "endtime": iso(t + time_tol), "minmagnitude": min_mag,
-                    "latitude": lat, "longitude": lon, "maxradiuskm": dist_tol})
+    if catalog is None:
+        catalog = usgs_query({"starttime": iso(t - time_tol), "endtime": iso(t + time_tol),
+                              "minmagnitude": min_mag, "latitude": lat, "longitude": lon,
+                              "maxradiuskm": dist_tol}).get("features", [])
     best = None
-    for f in g.get("features", []):
+    for f in catalog:
         p = f.get("properties", {})
         c = (f.get("geometry") or {}).get("coordinates") or [None, None]
-        if p.get("mag") is None:
+        if p.get("mag") is None or c[0] is None or float(p["mag"]) < min_mag:
+            continue
+        if abs(p["time"] / 1000.0 - t) > time_tol or haversine_km(lat, lon, c[1], c[0]) > dist_tol:
             continue
         cand = {"id": f["id"], "mag": float(p["mag"]), "place": p.get("place") or "",
                 "epoch": p["time"] / 1000.0, "dt": p["time"] / 1000.0 - t}
@@ -159,9 +190,10 @@ def main():
 
     # ---- precision: are the declared events real? ----
     declared = []
+    catalog = catalog_for(events, args.time_tol, args.dist_tol, args.match_mag)
     for ev in events:
-        m = match_real_for_declared(ev, args.time_tol, args.dist_tol, 0.0, args.match_mag)
-        c = match_real_for_declared(ev, args.time_tol, args.dist_tol, 3600.0, args.match_mag)
+        m = match_real_for_declared(ev, args.time_tol, args.dist_tol, 0.0, args.match_mag, catalog)
+        c = match_real_for_declared(ev, args.time_tol, args.dist_tol, 3600.0, args.match_mag, catalog)
         declared.append({"declared": ev, "match": m, "true": m is not None, "chance": c is not None})
     n_true = sum(d["true"] for d in declared)
     n_false = len(declared) - n_true
